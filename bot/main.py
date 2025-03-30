@@ -278,7 +278,7 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         for shop_name, shop_data in shops.items():
             current_level = shop_data.get("level", 1)
             next_level = current_level + 1
-            upgrade_cost = game.get_upgrade_cost(current_level)
+            upgrade_cost = game.get_upgrade_cost(current_level, shop_name)
             current_rate_hr = game.get_shop_income_rate(shop_name, current_level) * 3600
             next_rate_hr = game.get_shop_income_rate(shop_name, next_level) * 3600
             lines.append(f"- <b>{shop_name}</b> (Level {current_level} → {next_level}): Costs ya ${upgrade_cost:,.2f}, bumps your earnings from ${current_rate_hr:,.2f}/hr to ${next_rate_hr:,.2f}/hr.")

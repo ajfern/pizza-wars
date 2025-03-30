@@ -72,16 +72,16 @@ def initialize_database():
 INITIAL_CASH = 10
 INITIAL_SHOP_NAME = "Brooklyn"
 BASE_INCOME_PER_SECOND = 0.1
-BASE_UPGRADE_COST = 50
-UPGRADE_COST_MULTIPLIER = 1.5
+BASE_UPGRADE_COST = 75
+UPGRADE_COST_MULTIPLIER = 1.75
 
 EXPANSION_LOCATIONS = {
-    "Manhattan": ("level", 5, 1.5),      # Requirement: Brooklyn Lvl 5, 1.5x Base Income
-    "Queens": ("level", 10, 2.0),     # Requirement: Brooklyn Lvl 10, 2.0x Base Income
-    "Philadelphia": ("level", 15, 3.0), # Requirement: Brooklyn Lvl 15, 3.0x Base Income
-    "Albany": ("total_income", 25000, 4.0), # Requirement: Total Earned $25k, 4.0x Base Income
-    "Chicago": ("shops_count", 5, 6.0),    # Requirement: Own 5 Shops Total, 6.0x Base Income
-    "Tokyo": ("total_income", 1000000, 10.0) # Requirement: Total Earned $1M, 10.0x Base Income
+    "Manhattan":    ("level", 5, 1.5, 1.5),  # 1.5x cost
+    "Queens":       ("level", 10, 2.0, 2.0),  # 2.0x cost
+    "Philadelphia": ("level", 15, 3.0, 3.0),  # 3.0x cost
+    "Albany":       ("total_income", 25000, 4.0, 2.5),  # 2.5x cost
+    "Chicago":      ("shops_count", 5, 6.0, 4.0),  # 4.0x cost
+    "Tokyo":        ("total_income", 1000000, 10.0, 7.5) # 7.5x cost
 }
 
 # --- Achievement Definitions ---
@@ -362,8 +362,22 @@ def collect_income(user_id: int) -> tuple[float, list[str]]:
 
 # --- Upgrade & Expansion Logic (Modified for stats) ---
 
-def get_upgrade_cost(current_level: int) -> float:
-    return BASE_UPGRADE_COST * (UPGRADE_COST_MULTIPLIER ** (current_level - 1))
+def get_upgrade_cost(current_level: int, shop_name: str) -> float:
+    """Calculates the cost to upgrade to the next level, considering location."""
+    base_location_cost = BASE_UPGRADE_COST
+
+    # Get location cost scale factor (default to 1.0 for Brooklyn/initial)
+    location_cost_scale = 1.0
+    if shop_name != INITIAL_SHOP_NAME and shop_name in EXPANSION_LOCATIONS:
+        # Ensure the tuple has the 4th element (cost scale)
+        if len(EXPANSION_LOCATIONS[shop_name]) > 3:
+             location_cost_scale = EXPANSION_LOCATIONS[shop_name][3]
+        else:
+             logger.warning(f"Missing cost scale factor for expansion {shop_name}, using 1.0")
+
+    # Apply location scaling and level multiplier
+    level_cost = (base_location_cost * location_cost_scale) * (UPGRADE_COST_MULTIPLIER ** (current_level - 1))
+    return round(level_cost, 2) # Round to 2 decimal places
 
 def upgrade_shop(user_id: int, shop_name: str) -> tuple[bool, str, list[str]]:
     """Attempts to upgrade a shop. Returns (success, message, completed_challenge_messages)."""
@@ -375,7 +389,7 @@ def upgrade_shop(user_id: int, shop_name: str) -> tuple[bool, str, list[str]]:
         return False, f"You don't own a shop in {shop_name}!", []
 
     current_level = shops[shop_name].get("level", 1)
-    cost = get_upgrade_cost(current_level)
+    cost = get_upgrade_cost(current_level, shop_name)
     cash = player_data.get("cash", 0)
 
     if cash < cost:
@@ -619,7 +633,7 @@ def format_status(player_data: dict) -> str:
     else:
         for name, data in sorted(shops.items()):
             level = data.get("level", 1)
-            upgrade_cost = get_upgrade_cost(level)
+            upgrade_cost = get_upgrade_cost(level, name)
             status_lines.append(f"  - <b>{name}:</b> Level {level} (Upgrade Cost: ${upgrade_cost:,.2f})")
 
     income_rate = calculate_income_rate(shops)
