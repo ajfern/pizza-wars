@@ -465,6 +465,30 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"Error generating leaderboard: {e}", exc_info=True)
         await update.message.reply_text("Couldn't fetch the leaderboard right now, try again later.")
 
+# --- Help Command --- #
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sends a helpful message listing available commands."""
+    user = update.effective_user
+    logger.info(f"User {user.id if user else 'Unknown'} requested help.")
+
+    help_text = (
+        "🍕 <b>Pizza Empire Command Guide</b> 🍕\n\n"
+        "<b>Core Gameplay:</b>\n"
+        "/start - Initialize your pizza empire (or view this message again).\n"
+        "/status - Check your cash, shops, title, and achievements.\n"
+        "/collect - Scoop up the cash your shops have earned!\n"
+        "/upgrade [shop] - List upgrade options or upgrade a specific shop (e.g., `/upgrade Brooklyn`).\n"
+        "/expand [location] - List expansion options or expand to a new location (e.g., `/expand Manhattan`).\n\n"
+        "<b>Progression & Fun:</b>\n"
+        "/challenges - View your current daily and weekly challenges.\n"
+        "/leaderboard - See who's top dog on the global leaderboard.\n"
+        "/buycoins - View options to purchase Pizza Coins 🍕 (premium currency).\n"
+        # Add /boost here if/when implemented
+        "/help - Show this command guide.\n\n"
+        "<i>Now get back to building that empire!</i>"
+    )
+    await update.message.reply_html(help_text)
+
 # --- Payment Handlers ---
 async def buy_coins_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user # Get user object
@@ -574,7 +598,8 @@ def main() -> None:
     application.add_handler(CommandHandler("expand", expand_command))
     application.add_handler(CommandHandler("challenges", challenges_command))
     application.add_handler(CommandHandler("buycoins", buy_coins_command))
-    application.add_handler(CommandHandler("leaderboard", leaderboard_command)) # <<< Added leaderboard handler
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
+    application.add_handler(CommandHandler("help", help_command))
     # application.add_handler(CommandHandler("boost", boost_command)) # Placeholder boost command
 
     logger.info("Adding payment handlers...")
