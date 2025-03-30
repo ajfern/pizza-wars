@@ -159,7 +159,7 @@ async def buy_coins_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if not PAYMENT_PROVIDER_TOKEN:
         await update.message.reply_text(
-            "Sorry, the payment system is currently unavailable. Please try again later."
+            "My owner still hasn't signed up for a Stripe account."
         )
         return
 
