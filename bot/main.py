@@ -186,23 +186,29 @@ async def collect_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     try:
         collected_amount, completed_challenges = game.collect_income(user.id)
         tip_message = ""
+        pineapple_message = "" # <-- Initialize pineapple message
 
         if collected_amount > 0.01:
             # --- "Just the Tip" Mechanic --- #
             tip_chance = 0.15 # 15% chance of getting a tip
             if random.random() < tip_chance:
                 player_data = game.load_player_data(user.id) # Need to reload to add tip
-                # Tip amount relative to current cash? Or income rate? Simple fixed range for now.
                 tip_amount = round(random.uniform(collected_amount * 0.05, collected_amount * 0.2) + random.uniform(5, 50), 2)
                 tip_amount = max(5.0, tip_amount) # Minimum tip
-
                 player_data["cash"] = player_data.get("cash", 0) + tip_amount
-                game.save_player_data(user.id, player_data)
+                game.save_player_data(user.id, player_data) # Save tip addition
                 tip_message = f"\n🍕 Woah, some wiseguy just tipped you an extra ${tip_amount:.2f} for the 'best slice in town.' You're killin' it!"
                 logger.info(f"User {user.id} received a tip of ${tip_amount:.2f}")
 
+            # --- Pineapple Easter Egg --- #
+            pineapple_chance = 0.05 # 5% chance
+            if random.random() < pineapple_chance:
+                pineapple_message = "\n🍍 Psst... Remember, putting pineapple on your pizza may get you sent to the gulag."
+                logger.info(f"User {user.id} triggered the pineapple easter egg.")
+
             # --- Cheeky Feedback --- #
-            await update.message.reply_html(f"🤑 Pizza payday, baby! You just grabbed ${collected_amount:.2f} fresh outta the oven!{tip_message}")
+            # Append both messages if they triggered
+            await update.message.reply_html(f"🤑 Pizza payday, baby! You just grabbed ${collected_amount:.2f} fresh outta the oven!{tip_message}{pineapple_message}")
 
             await send_challenge_notifications(user.id, completed_challenges, context)
             await check_and_notify_achievements(user.id, context)
