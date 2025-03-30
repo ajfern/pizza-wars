@@ -136,7 +136,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
              logger.info(f"New player {user.id}, generating initial challenges.")
              game.generate_new_challenges(user.id, 'daily')
              game.generate_new_challenges(user.id, 'weekly')
-             player_data = game.load_player_data(user_id) # Reload data
+             player_data = game.load_player_data(user.id) # <-- Corrected to user.id
 
         player_data["last_login_time"] = game.time.time()
         logger.info(f"Saving updated player data for {user.id}...")
