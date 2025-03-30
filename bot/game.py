@@ -74,6 +74,7 @@ INITIAL_SHOP_NAME = "Brooklyn"
 BASE_INCOME_PER_SECOND = 0.1
 BASE_UPGRADE_COST = 75
 UPGRADE_COST_MULTIPLIER = 1.75
+UPGRADE_FAILURE_CHANCE = 0.15 # 15% chance for an upgrade to fail
 
 EXPANSION_LOCATIONS = {
     "Manhattan":    ("level", 5, 1.5, 1.5),  # 1.5x cost
@@ -360,7 +361,7 @@ def collect_income(user_id: int) -> tuple[float, list[str]]:
     else:
         return 0.0, []
 
-# --- Upgrade & Expansion Logic (Modified for stats) ---
+# --- Upgrade & Expansion Logic (Modified for failure chance) ---
 
 def get_upgrade_cost(current_level: int, shop_name: str) -> float:
     """Calculates the cost to upgrade to the next level, considering location."""
@@ -380,8 +381,12 @@ def get_upgrade_cost(current_level: int, shop_name: str) -> float:
     return round(level_cost, 2) # Round to 2 decimal places
 
 def upgrade_shop(user_id: int, shop_name: str) -> tuple[bool, str, list[str]]:
-    """Attempts to upgrade a shop. Returns (success, message, completed_challenge_messages)."""
+    """Attempts to upgrade a shop with a chance of failure.
+       Returns (success, message_or_data, completed_challenge_messages)."""
     player_data = load_player_data(user_id)
+    if not player_data:
+        return False, "Failed to load player data.", []
+
     shops = player_data.get("shops", {})
     completed_challenges = []
 
@@ -395,18 +400,32 @@ def upgrade_shop(user_id: int, shop_name: str) -> tuple[bool, str, list[str]]:
     if cash < cost:
         return False, f"Not enough cash! Need ${cost:.2f} to upgrade {shop_name} to level {current_level + 1}. You have ${cash:.2f}.", []
 
+    # --- Upgrade Attempt: Deduct cost first --- #
     player_data["cash"] = cash - cost
-    player_data["shops"][shop_name]["level"] = current_level + 1
-    player_data["stats"]["session_upgrades"] = player_data["stats"].get("session_upgrades", 0) + 1
+    logger.info(f"User {user_id} attempting upgrade on {shop_name} Lvl {current_level}. Cost: ${cost:.2f}. New cash (temp): ${player_data['cash']:.2f}")
 
-    # Check challenges after updating stats
-    completed_challenges = update_challenge_progress(player_data, ["session_upgrades"])
+    # --- Check for Failure --- #
+    if random.random() < UPGRADE_FAILURE_CHANCE:
+        logger.warning(f"Upgrade FAILED for user {user_id} on {shop_name} Lvl {current_level}!")
+        # Save the data with deducted cash, but no level increase or stats update
+        save_player_data(user_id, player_data)
+        # Return False and the cost (so main.py can mention it in the failure message)
+        return False, f"Oh no! The upgrade failed! You lost ${cost:,.2f} in the attempt!", []
+    else:
+        # --- Success --- #
+        logger.info(f"Upgrade SUCCEEDED for user {user_id} on {shop_name} Lvl {current_level}.")
+        player_data["shops"][shop_name]["level"] = current_level + 1
+        player_data["stats"]["session_upgrades"] = player_data["stats"].get("session_upgrades", 0) + 1
 
-    save_player_data(user_id, player_data)
+        # Check challenges after successful upgrade
+        completed_challenges = update_challenge_progress(player_data, ["session_upgrades"])
 
-    income_rate = calculate_income_rate(player_data["shops"])
-    msg = f"Successfully upgraded {shop_name} to Level {current_level + 1}! Cost: ${cost:.2f}. New total income rate: ${income_rate:.2f}/sec."
-    return True, msg, completed_challenges
+        save_player_data(user_id, player_data)
+
+        income_rate = calculate_income_rate(player_data["shops"])
+        # Return True and standard success info (main.py handles the cheeky message)
+        msg = f"Upgrade successful for {shop_name} to Level {current_level + 1}. Cost: ${cost:.2f}. New total income rate: ${income_rate:.2f}/sec."
+        return True, msg, completed_challenges
 
 def get_available_expansions(player_data: dict) -> list[str]:
     available = []

@@ -303,11 +303,12 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     logger.info(f"User {user.id} attempting to upgrade '{target_shop_name}'.")
 
     try:
-        current_level = shops[target_shop_name].get("level", 1) # Get level before potential success message
-        success, message, completed_challenges = game.upgrade_shop(user.id, target_shop_name)
+        current_level = shops[target_shop_name].get("level", 1)
+        # upgrade_shop now returns cost info in message on failure
+        success, result_message, completed_challenges = game.upgrade_shop(user.id, target_shop_name)
 
-        # --- Cheeky Feedback --- #
         if success:
+            # --- Cheeky SUCCESS Feedback --- #
             fun_messages = [
                 f"🍾 Hot dang! Your {target_shop_name} spot just hit Level {current_level + 1}. Lines around the block incoming!",
                 f"🤌 Mama mia! {target_shop_name} is now Level {current_level + 1}! More dough, less problems!",
@@ -317,8 +318,20 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await send_challenge_notifications(user.id, completed_challenges, context)
             await check_and_notify_achievements(user.id, context)
         else:
-            # Send the error message from game.upgrade_shop
-            await update.message.reply_html(message)
+            # --- Dramatic FAILURE Feedback --- #
+            # Check if it was the 'Not enough cash' error or the random failure
+            if "Not enough cash" in result_message:
+                 await update.message.reply_html(result_message) # Send the standard message
+            else:
+                 # It was a random failure, use dramatic messages
+                 cost_lost_str = result_message.split("lost ")[-1].split(" in")[0] # Extract cost from message
+                 failure_messages = [
+                      f"💥 KABOOM! The contractors messed up! The upgrade failed and ${cost_lost_str} went up in smoke!",
+                      f"😱 Mamma Mia! A sinkhole swallowed the construction crew! Upgrade failed, dough is gone (${cost_lost_str})!",
+                      f"📉 Bad investment, boss! The upgrade for {target_shop_name} flopped harder than a soggy pizza base. Lost ${cost_lost_str}!",
+                      f"🔥 Grease fire! The whole upgrade went belly-up. Kiss ${cost_lost_str} goodbye!"
+                 ]
+                 await update.message.reply_html(random.choice(failure_messages))
 
     except Exception as e:
         logger.error(f"Error during upgrade_command for {user.id}, shop {target_shop_name}: {e}", exc_info=True)
