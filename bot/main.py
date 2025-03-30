@@ -5,7 +5,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 # Import game logic functions
-from . import game # Use relative import
+import game # <-- Corrected import
 
 # Enable logging
 logging.basicConfig(
