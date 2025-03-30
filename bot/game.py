@@ -46,6 +46,7 @@ def initialize_database():
     create_table_sql = """
     CREATE TABLE IF NOT EXISTS players (
         user_id BIGINT PRIMARY KEY,
+        display_name TEXT,
         cash NUMERIC(18, 4) DEFAULT 0.0,
         pizza_coins INTEGER DEFAULT 0,
         shops JSONB DEFAULT '{}'::jsonb,
@@ -115,6 +116,26 @@ CHALLENGE_TYPES = {
 
 # --- Database Player Data Management ---
 
+def update_display_name(user_id: int, user: "telegram.User | None") -> None:
+    """Updates the player's display name in the database if available."""
+    if not user or not user.full_name:
+        return # Cannot update without user object or name
+
+    logger.debug(f"Checking/Updating display name for user {user_id}")
+    conn = get_db_connection()
+    if not conn: return
+
+    sql_update = "UPDATE players SET display_name = %s WHERE user_id = %s AND (display_name IS NULL OR display_name != %s);"
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql_update, (user.full_name, user_id, user.full_name))
+            if cur.rowcount > 0:
+                logger.info(f"Updated display name for user {user_id} to '{user.full_name}'")
+        conn.commit()
+    except psycopg2.DatabaseError as e:
+        logger.error(f"Database error updating display name for {user_id}: {e}", exc_info=True)
+        conn.rollback()
+
 def load_player_data(user_id: int) -> dict | None:
     """Loads player data from the database. Returns default state if not found."""
     logger.debug(f"Attempting to load data for user {user_id} from database.")
@@ -122,7 +143,7 @@ def load_player_data(user_id: int) -> dict | None:
     if not conn: return get_default_player_state(user_id) # Return default if DB fails initially
 
     sql = """
-    SELECT cash, pizza_coins, shops, unlocked_achievements, current_title,
+    SELECT display_name, cash, pizza_coins, shops, unlocked_achievements, current_title,
            active_challenges, challenge_progress, stats, total_income_earned, last_login_time
     FROM players WHERE user_id = %s;
     """
@@ -135,21 +156,20 @@ def load_player_data(user_id: int) -> dict | None:
 
         if result:
             logger.debug(f"Found existing player data for {user_id}.")
-            # Map database columns back to dictionary structure
             player_data = {
                 "user_id": user_id,
-                "cash": float(result[0]), # Convert NUMERIC back to float
-                "pizza_coins": result[1],
-                "shops": result[2] if result[2] is not None else {},
-                "unlocked_achievements": result[3] if result[3] is not None else [],
-                "current_title": result[4],
-                "active_challenges": result[5] if result[5] is not None else {'daily': None, 'weekly': None},
-                "challenge_progress": result[6] if result[6] is not None else {'daily': {}, 'weekly': {}},
-                "stats": result[7] if result[7] is not None else {},
-                "total_income_earned": float(result[8]), # Convert NUMERIC back to float
-                "last_login_time": result[9].timestamp() if result[9] else time.time() # Convert timestamp
+                "display_name": result[0],
+                "cash": float(result[1]),
+                "pizza_coins": result[2],
+                "shops": result[3] if result[3] is not None else {},
+                "unlocked_achievements": result[4] if result[4] is not None else [],
+                "current_title": result[5],
+                "active_challenges": result[6] if result[6] is not None else {'daily': None, 'weekly': None},
+                "challenge_progress": result[7] if result[7] is not None else {'daily': {}, 'weekly': {}},
+                "stats": result[8] if result[8] is not None else {},
+                "total_income_earned": float(result[9]),
+                "last_login_time": result[10].timestamp() if result[10] else time.time()
             }
-            # Ensure default sub-dicts/lists if DB had nulls that weren't caught by DEFAULT
             player_data.setdefault("active_challenges", {'daily': None, 'weekly': None})
             player_data.setdefault("challenge_progress", {'daily': {}, 'weekly': {}})
             player_data.setdefault("stats", {})
@@ -160,7 +180,6 @@ def load_player_data(user_id: int) -> dict | None:
             return player_data
         else:
             logger.info(f"No player data found for {user_id}. Inserting default state.")
-            # Insert default state for new player
             save_player_data(user_id, default_state) # Use save function to insert
             return default_state
 
@@ -206,11 +225,12 @@ def save_player_data(user_id: int, data: dict) -> None:
 
     sql = """
     INSERT INTO players (
-        user_id, cash, pizza_coins, shops, unlocked_achievements, current_title,
+        user_id, display_name, cash, pizza_coins, shops, unlocked_achievements, current_title,
         active_challenges, challenge_progress, stats, total_income_earned, last_login_time
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s))
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s))
     ON CONFLICT (user_id) DO UPDATE SET
+        display_name = EXCLUDED.display_name,
         cash = EXCLUDED.cash,
         pizza_coins = EXCLUDED.pizza_coins,
         shops = EXCLUDED.shops,
@@ -234,6 +254,7 @@ def save_player_data(user_id: int, data: dict) -> None:
         with conn.cursor() as cur:
             cur.execute(sql, (
                 user_id,
+                data["display_name"],
                 data["cash"],
                 data["pizza_coins"],
                 shops_json,
@@ -658,3 +679,31 @@ def use_pizza_coins_for_speedup(user_id: int, feature: str):
         return "Spending Pizza Coins is coming soon!"
     else:
         return "You don't have any Pizza Coins! Purchases are coming soon."
+
+def get_leaderboard_data(limit: int = 10) -> list[tuple[int, str | None, float]]:
+    """Fetches top players based on total_income_earned."""
+    logger.debug(f"Fetching leaderboard data (top {limit})")
+    conn = get_db_connection()
+    if not conn: return []
+
+    sql = """
+    SELECT user_id, display_name, total_income_earned
+    FROM players
+    ORDER BY total_income_earned DESC
+    LIMIT %s;
+    """
+    results = []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (limit,))
+            fetched_results = cur.fetchall()
+            # Convert numeric total_income_earned back to float
+            results = [(row[0], row[1], float(row[2])) for row in fetched_results]
+        logger.debug(f"Fetched {len(results)} rows for leaderboard.")
+    except psycopg2.DatabaseError as e:
+        logger.error(f"Database error fetching leaderboard: {e}", exc_info=True)
+        conn.rollback()
+    except Exception as e:
+        logger.error(f"Unexpected error fetching leaderboard: {e}", exc_info=True)
+
+    return results

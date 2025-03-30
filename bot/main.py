@@ -83,6 +83,12 @@ async def send_challenge_notifications(user_id: int, messages: list[str], contex
     except Exception as e:
         logger.error(f"Error sending challenge notification to {user_id}: {e}", exc_info=True)
 
+# --- Utility function to update name ---
+async def update_player_display_name(user_id: int, user: "telegram.User | None"):
+    """Helper to call the game logic update function."""
+    if user:
+        game.update_display_name(user_id, user)
+
 # --- Scheduled Job Functions ---
 async def generate_daily_challenges_job(context: ContextTypes.DEFAULT_TYPE):
     """Scheduled job to generate daily challenges for all known players."""
@@ -133,6 +139,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.warning("start_command called without user info")
         return
 
+    await update_player_display_name(user.id, user) # <-- Update name on start
     logger.info(f"User {user.id} ({user.username}) triggered /start.")
     is_new_player = not game.get_player_data_path(user.id).exists()
 
@@ -183,6 +190,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user = update.effective_user
     if not user:
         return
+    await update_player_display_name(user.id, user) # <-- Update name on status
     logger.info(f"User {user.id} requested status.")
     player_data = game.load_player_data(user.id)
     status_message = game.format_status(player_data)
@@ -192,6 +200,7 @@ async def collect_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user = update.effective_user
     if not user:
         return
+    await update_player_display_name(user.id, user) # <-- Update name on collect
     logger.info(f"User {user.id} requested collection.")
     try:
         collected_amount, completed_challenges = game.collect_income(user.id)
@@ -234,7 +243,7 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not user:
          await update.message.reply_text("Can't upgrade if I don't know who you are!")
          return
-
+    await update_player_display_name(user.id, user) # <-- Update name on upgrade
     player_data = game.load_player_data(user.id)
     shops = player_data.get("shops", {})
 
@@ -299,6 +308,7 @@ async def expand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not user:
          await update.message.reply_text("Who dis? Can't expand if I dunno who you are.")
          return
+    await update_player_display_name(user.id, user) # <-- Update name on expand
     if not context.args:
         # Maybe list available expansions here too?
         player_data = game.load_player_data(user.id)
@@ -351,10 +361,10 @@ async def expand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Whoa there! Somethin' went sideways tryin' to expand.")
 
 async def challenges_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Displays the player's active challenges, generating if missing."""
     user = update.effective_user
     if not user:
         return
+    await update_player_display_name(user.id, user) # <-- Update name on challenges
     logger.info(f"User {user.id} requested challenges.")
     player_data = game.load_player_data(user.id)
     needs_save = False # Flag to check if we modified data
@@ -403,9 +413,44 @@ async def challenges_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await update.message.reply_html("\n".join(lines))
 
+# --- New Leaderboard Command --- #
+async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Displays the global leaderboard."""
+    user = update.effective_user
+    if not user:
+        return
+    logger.info(f"User {user.id} requested leaderboard.")
+    await update_player_display_name(user.id, user) # Ensure name is updated
+
+    try:
+        top_players = game.get_leaderboard_data(limit=10) # Get Top 10
+
+        if not top_players:
+            await update.message.reply_text("The leaderboard is empty! Be the first!")
+            return
+
+        lines = ["<b>🏆 Global Pizza Empire Leaderboard 🏆</b>\n(Based on Total Income Earned)\n"] # Add emoji
+        for i, (player_id, display_name, total_income) in enumerate(top_players):
+            rank = i + 1
+            name = display_name or f"Player {player_id}" # Fallback if name is missing
+            # Truncate long names if needed
+            if len(name) > 25:
+                 name = name[:22] + "..."
+            lines.append(f"{rank}. {name} - ${total_income:,.2f}")
+
+        await update.message.reply_html("\n".join(lines))
+
+    except Exception as e:
+        logger.error(f"Error generating leaderboard: {e}", exc_info=True)
+        await update.message.reply_text("Couldn't fetch the leaderboard right now, try again later.")
+
 # --- Payment Handlers ---
 async def buy_coins_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.message.chat_id
+    user = update.effective_user # Get user object
+    if not user:
+         await update.message.reply_text("Cannot buy coins without user info.")
+         return
+    await update_player_display_name(user.id, user) # <-- Update name on buycoins
     if not PAYMENT_PROVIDER_TOKEN:
         await update.message.reply_text(
             "My owner still hasn't signed up for a Stripe account. If you send him funds, he will send you a bajillion pizza coins."
@@ -413,17 +458,17 @@ async def buy_coins_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     for pack_id, (name, description, price_cents, coin_amount) in game.PIZZA_COIN_PACKS.items():
         title = f"{name} ({coin_amount} Coins)"
-        payload = f"BUY_{pack_id.upper()}_{chat_id}"
+        payload = f"BUY_{pack_id.upper()}_{user.id}"
         currency = "USD"
         prices = [LabeledPrice(label=name, amount=price_cents)]
-        logger.info(f"Sending invoice for {pack_id} to chat {chat_id}")
+        logger.info(f"Sending invoice for {pack_id} to chat {user.id}")
         try:
             await context.bot.send_invoice(
-                chat_id=chat_id, title=title, description=description, payload=payload,
+                chat_id=user.id, title=title, description=description, payload=payload,
                 provider_token=PAYMENT_PROVIDER_TOKEN, currency=currency, prices=prices,
             )
         except Exception as e:
-            logger.error(f"Failed to send invoice for {pack_id} to {chat_id}: {e}", exc_info=True)
+            logger.error(f"Failed to send invoice for {pack_id} to {user.id}: {e}", exc_info=True)
             await update.message.reply_text(f"Sorry, couldn't start the purchase for {name}. Please try again.")
 
 async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -448,6 +493,10 @@ async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.answer(ok=True)
 
 async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # User object is available here
+    user = update.message.from_user
+    if user:
+        await update_player_display_name(user.id, user)
     payment_info = update.message.successful_payment
     payload = payment_info.invoice_payload
     user_id = update.message.from_user.id
@@ -502,8 +551,9 @@ def main() -> None:
     application.add_handler(CommandHandler("collect", collect_command))
     application.add_handler(CommandHandler("upgrade", upgrade_command))
     application.add_handler(CommandHandler("expand", expand_command))
-    application.add_handler(CommandHandler("challenges", challenges_command)) # Add challenges command
+    application.add_handler(CommandHandler("challenges", challenges_command))
     application.add_handler(CommandHandler("buycoins", buy_coins_command))
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command)) # <<< Added leaderboard handler
     # application.add_handler(CommandHandler("boost", boost_command)) # Placeholder boost command
 
     logger.info("Adding payment handlers...")
