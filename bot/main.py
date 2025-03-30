@@ -139,28 +139,50 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.warning("start_command called without user info")
         return
 
-    await update_player_display_name(user.id, user) # <-- Update name on start
+    await update_player_display_name(user.id, user) # Update name first
     logger.info(f"User {user.id} ({user.username}) triggered /start.")
-    is_new_player = not game.get_player_data_path(user.id).exists()
 
     try:
         logger.info(f"Loading player data for {user.id}...")
         player_data = game.load_player_data(user.id)
+        if not player_data: # Handle potential load failure
+             logger.error(f"Failed to load or initialize player data for {user.id} in start_command.")
+             await update.message.reply_text("Sorry, couldn't retrieve your game data. Please try again.")
+             return
+
         logger.info(f"Player data loaded for {user.id}.")
 
-        # Generate initial challenges if new player
-        if is_new_player:
-             logger.info(f"New player {user.id}, generating initial challenges.")
+        # --- Check if player seems new based on default data --- #
+        # (e.g., exactly initial cash AND only the starting shop at level 1)
+        is_likely_new = (
+            player_data.get('total_income_earned', 0) < 0.01 and
+            len(player_data.get('shops', {})) == 1 and
+            game.INITIAL_SHOP_NAME in player_data.get('shops', {}) and
+            player_data['shops'][game.INITIAL_SHOP_NAME].get('level') == 1
+        )
+
+        if is_likely_new:
+             logger.info(f"Likely new player {user.id}, generating initial challenges.")
+             # Ensure stats are reset correctly for new players before generating
+             player_data['stats'] = {k: 0 for k in player_data.get('stats', {})} # Reset just in case
+             game.save_player_data(user.id, player_data) # Save reset stats before generating
+             # Generate challenges (will load/save again inside)
              game.generate_new_challenges(user.id, 'daily')
              game.generate_new_challenges(user.id, 'weekly')
-             player_data = game.load_player_data(user.id) # <-- Corrected to user.id
+             # Reload data to get generated challenges for the status message
+             player_data = game.load_player_data(user.id)
+             if not player_data: # Handle potential load failure after generation
+                  logger.error(f"Failed to reload player data for {user.id} after challenge generation.")
+                  await update.message.reply_text("Sorry, couldn't retrieve updated game data. Please try /status.")
+                  return
 
+        # --- Update login time and save --- #
         player_data["last_login_time"] = game.time.time()
         logger.info(f"Saving updated player data for {user.id}...")
-        game.save_player_data(user.id, player_data)
+        game.save_player_data(user.id, player_data) # Save login time etc.
         logger.info(f"Player data saved for {user.id}.")
 
-        # --- Saucy Onboarding Instructions --- #
+        # --- Send Welcome & Initial Status --- #
         reply_message = (
             f"🍕 Ay-oh, Pizza Boss {user.mention_html()}! Welcome to Pizza Empire, where dough rules everything around me!\n\n"
             f"Here's how ya slice up the competition:\n"
@@ -169,17 +191,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"- Dominate from Brooklyn to the whole freakin' planet by hittin' big pizza milestones.\n\n"
             f"Now, get cookin', capisce? Check your /status!"
         )
-
         logger.info(f"Attempting to send welcome message to {user.id}...")
         await update.message.reply_html(reply_message)
         logger.info(f"Welcome message sent successfully to {user.id}.")
 
-        # --- FTUE: Show status immediately --- #
-        logger.info(f"Sending initial status to new/returning player {user.id}")
-        status_message = game.format_status(player_data) # Use reloaded data if new player
+        # FTUE: Show status immediately
+        logger.info(f"Sending initial status to player {user.id}")
+        status_message = game.format_status(player_data)
         await update.message.reply_html(status_message)
-        # --- End FTUE --- #
 
+        # Check initial achievements (safe even if not new, won't re-award)
         await check_and_notify_achievements(user.id, context)
 
     except Exception as e:
