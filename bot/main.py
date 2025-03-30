@@ -1,7 +1,7 @@
 import logging
 import os
 
-from telegram import Update, ParseMode
+from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 # Import game logic functions
