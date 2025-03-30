@@ -1,3 +1,4 @@
 python-telegram-bot==21.4
 APScheduler==3.10.4 # For scheduling daily/weekly tasks
+psycopg2-binary==2.9.9 # For PostgreSQL connection
 
