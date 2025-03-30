@@ -159,7 +159,7 @@ async def buy_coins_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if not PAYMENT_PROVIDER_TOKEN:
         await update.message.reply_text(
-            "My owner still hasn't signed up for a Stripe account."
+            "My owner still hasn't signed up for a Stripe account. If you send him funds, he will send you a bajillion pizza coins."
         )
         return
 
