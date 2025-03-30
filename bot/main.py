@@ -157,6 +157,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_html(reply_message)
         logger.info(f"Welcome message sent successfully to {user.id}.")
 
+        # --- FTUE: Show status immediately --- #
+        logger.info(f"Sending initial status to new/returning player {user.id}")
+        status_message = game.format_status(player_data) # Use reloaded data if new player
+        await update.message.reply_html(status_message)
+        # --- End FTUE --- #
+
         await check_and_notify_achievements(user.id, context)
 
     except Exception as e:
@@ -305,7 +311,8 @@ async def expand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     logger.info(f"User {user.id} attempting to expand to '{target_expansion_name}'.")
 
     try:
-        success, message = game.expand_shop(user.id, target_expansion_name)
+        # Expand shop now returns completed challenges
+        success, message, completed_challenges = game.expand_shop(user.id, target_expansion_name)
 
         # --- Cheeky Feedback --- #
         if success:
@@ -315,6 +322,9 @@ async def expand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                  f"🍕 Plantin' the flag in {target_expansion_name}! More ovens, more money!"
             ]
             await update.message.reply_html(random.choice(fun_messages))
+            # Notify about completed expansion challenges
+            await send_challenge_notifications(user.id, completed_challenges, context)
+            # Check achievements AFTER replying about expansion
             await check_and_notify_achievements(user.id, context)
         else:
             # Send the error message from game.expand_shop

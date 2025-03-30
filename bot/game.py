@@ -19,21 +19,32 @@ BASE_UPGRADE_COST = 50
 UPGRADE_COST_MULTIPLIER = 1.5
 
 EXPANSION_LOCATIONS = {
-    "Manhattan": ("level", 5, 2.0),
-    "Queens": ("level", 10, 3.0),
-    "Albany": ("total_income", 10000, 5.0),
+    "Manhattan": ("level", 5, 1.5),      # Requirement: Brooklyn Lvl 5, 1.5x Base Income
+    "Queens": ("level", 10, 2.0),     # Requirement: Brooklyn Lvl 10, 2.0x Base Income
+    "Philadelphia": ("level", 15, 3.0), # Requirement: Brooklyn Lvl 15, 3.0x Base Income
+    "Albany": ("total_income", 25000, 4.0), # Requirement: Total Earned $25k, 4.0x Base Income
+    "Chicago": ("shops_count", 5, 6.0),    # Requirement: Own 5 Shops Total, 6.0x Base Income
+    "Tokyo": ("total_income", 1000000, 10.0) # Requirement: Total Earned $1M, 10.0x Base Income
 }
 
 # --- Achievement Definitions ---
 # ID: (Name, Description, Check Function Args, Requirement, Reward Type, Reward Value, Title Awarded)
 # Check Function Args: Tuple defining what metric to check (e.g., ('total_income',), ('shops_count',))
 ACHIEVEMENTS = {
+    # Income Milestones
     "income_1k": ("Pizza Mogul", "Earn $1,000 total", ('total_income_earned',), 1000, 'cash', 100, "Mogul"),
     "income_10k": ("Pizza Tycoon", "Earn $10,000 total", ('total_income_earned',), 10000, 'pizza_coins', 50, "Tycoon"),
     "income_100k": ("Pizza Baron", "Earn $100,000 total", ('total_income_earned',), 100000, 'pizza_coins', 250, "Baron"),
+    "income_1m": ("Pizza Magnate", "Earn $1,000,000 total", ('total_income_earned',), 1000000, 'pizza_coins', 1000, "Magnate"),
+    # Shop Count Milestones
     "shops_3": ("City Spreader", "Own 3 shops", ('shops_count',), 3, 'cash', 500, "City Spreader"),
     "shops_5": ("Empire Builder", "Own 5 shops", ('shops_count',), 5, 'pizza_coins', 100, "Empire Builder"),
+    # Specific Shop Level Milestones
     "brooklyn_10": ("Brooklyn Boss", "Upgrade Brooklyn to Level 10", ('shop_level', INITIAL_SHOP_NAME), 10, 'cash', 2000, "Brooklyn Boss"),
+    "manhattan_5": ("Manhattan Maven", "Upgrade Manhattan to Level 5", ('shop_level', "Manhattan"), 5, 'pizza_coins', 25, "Manhattan Maven"),
+    # Expansion Milestones
+    "first_expansion": ("Branching Out", "Open your second shop", ('shops_count',), 2, 'cash', 250, None), # No title for this one
+    "statewide": ("Empire State of Mind", "Expand to Albany", ('has_shop', "Albany"), 1, 'pizza_coins', 75, None),
     # Add more achievements: rivals defeated (requires rival logic), specific shop levels, etc.
 }
 
@@ -43,7 +54,7 @@ CHALLENGE_TYPES = {
     "earn_cash": ("Earn ${goal:,.2f} {timescale}", "session_income", None, 100, 1.5, 'cash', 50, 1.5),
     "upgrade_shops": ("Upgrade {goal} shops {timescale}", "session_upgrades", None, 1, 1.2, 'pizza_coins', 10, 1.3),
     "collect_times": ("Collect income {goal} times {timescale}", "session_collects", None, 3, 1.1, 'cash', 20, 1.2),
-    # Add more types later (e.g., expand shops, reach level X)
+    "expand_shops": ("Expand to {goal} new location(s) {timescale}", "session_expansions", None, 1, 1.1, 'pizza_coins', 50, 1.4) # Requires tracking expansions
 }
 
 # --- Player Data Management ---
@@ -75,6 +86,7 @@ def load_player_data(user_id: int) -> dict:
                      "session_income": 0,
                      "session_upgrades": 0,
                      "session_collects": 0,
+                     "session_expansions": 0
                  }
             # --- End Migration --- #
             return data
@@ -99,6 +111,7 @@ def save_player_data(user_id: int, data: dict) -> None:
         data["stats"].setdefault("session_income", 0)
         data["stats"].setdefault("session_upgrades", 0)
         data["stats"].setdefault("session_collects", 0)
+        data["stats"].setdefault("session_expansions", 0)
 
         with open(filepath, 'w') as f:
             json.dump(data, f, indent=4)
@@ -137,6 +150,7 @@ def get_default_player_state(user_id: int) -> dict:
             "session_income": 0,
             "session_upgrades": 0,
             "session_collects": 0,
+            "session_expansions": 0
         }
     }
 
@@ -248,35 +262,43 @@ def get_available_expansions(player_data: dict) -> list[str]:
             available.append(name)
     return available
 
-def expand_shop(user_id: int, expansion_name: str) -> tuple[bool, str]:
-    """Attempts to establish a new shop in an expansion location. Returns (success, message)."""
-    # Note: Expansion itself doesn't directly complete challenges in this design
-    # but opening shops contributes to achievement checks later.
+def expand_shop(user_id: int, expansion_name: str) -> tuple[bool, str, list[str]]:
+    """Attempts to establish a new shop. Returns (success, message, completed_challenge_messages)."""
     player_data = load_player_data(user_id)
     available_expansions = get_available_expansions(player_data)
+    completed_challenges = []
 
     if expansion_name not in EXPANSION_LOCATIONS:
-         return False, f"{expansion_name} is not a valid expansion location."
+         return False, f"{expansion_name} is not a valid expansion location.", []
 
     if expansion_name in player_data["shops"]:
-        return False, f"You already have a shop in {expansion_name}!"
+        return False, f"You already have a shop in {expansion_name}!", []
 
     if expansion_name not in available_expansions:
         req_type, req_value, _ = EXPANSION_LOCATIONS[expansion_name]
         if req_type == "level":
-            return False, f"You can't expand to {expansion_name} yet. Requires {INITIAL_SHOP_NAME} to be Level {req_value}."
+            return False, f"You can't expand to {expansion_name} yet. Requires {INITIAL_SHOP_NAME} to be Level {req_value}.", []
         elif req_type == "total_income":
-             return False, f"You can't expand to {expansion_name} yet. Requires ${req_value:,.2f} total income earned."
+             return False, f"You can't expand to {expansion_name} yet. Requires ${req_value:,.2f} total income earned.", []
+        elif req_type == "shops_count":
+             owned_count = len(player_data.get("shops", {}))
+             return False, f"You can't expand to {expansion_name} yet. Requires {req_value} total shops (you have {owned_count}).", []
         else:
-             return False, f"You don't meet the requirements to expand to {expansion_name} yet."
+             return False, f"You don't meet the requirements to expand to {expansion_name} yet.", []
 
     player_data["shops"][expansion_name] = {
         "level": 1,
         "last_collected_time": time.time()
     }
+    player_data["stats"]["session_expansions"] = player_data["stats"].get("session_expansions", 0) + 1
+
+    # Check challenges after updating stats
+    completed_challenges = update_challenge_progress(player_data, ["session_expansions"])
+
     save_player_data(user_id, player_data)
     income_rate = calculate_income_rate(player_data["shops"])
-    return True, f"Congratulations! You've expanded your pizza empire to {expansion_name}! New total income rate: ${income_rate:.2f}/sec."
+    msg = f"Congratulations! You've expanded your pizza empire to {expansion_name}! New total income rate: ${income_rate:.2f}/sec."
+    return True, msg, completed_challenges
 
 # --- Achievement Logic ---
 
@@ -292,6 +314,9 @@ def get_achievement_value(player_data: dict, metric_args: tuple) -> float | int:
     elif metric == 'shop_level':
         shop_name = metric_args[1]
         return shops.get(shop_name, {}).get("level", 0)
+    elif metric == 'has_shop':
+        shop_name = metric_args[1]
+        return 1 if shop_name in shops else 0
     # Add more metrics here
     else:
         return 0
