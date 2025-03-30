@@ -34,27 +34,32 @@ def get_player_data_path(user_id: int) -> Path:
 def load_player_data(user_id: int) -> dict:
     """Loads player data from JSON file. Returns default if not found."""
     filepath = get_player_data_path(user_id)
+    logger.debug(f"Attempting to load data for {user_id} from {filepath}")
     if filepath.exists():
         try:
             with open(filepath, 'r') as f:
                 data = json.load(f)
+                logger.debug(f"Successfully loaded data for {user_id}.")
                 # Add migration logic here if data structure changes later
                 return data
         except (json.JSONDecodeError, OSError) as e:
-            logger.error(f"Error loading data for {user_id}: {e}")
+            logger.error(f"Error loading data for {user_id}: {e}. Returning default state.")
             # Fallback to default data in case of error
             return get_default_player_state(user_id)
     else:
+        logger.info(f"No data file found for {user_id}. Returning default state.")
         return get_default_player_state(user_id)
 
 def save_player_data(user_id: int, data: dict) -> None:
     """Saves player data to JSON file."""
     filepath = get_player_data_path(user_id)
+    logger.debug(f"Attempting to save data for {user_id} to {filepath}")
     try:
         with open(filepath, 'w') as f:
             json.dump(data, f, indent=4)
+        logger.debug(f"Successfully saved data for {user_id}.")
     except OSError as e:
-        logger.error(f"Error saving data for {user_id}: {e}")
+        logger.error(f"Error saving data for {user_id} to {filepath}: {e}")
 
 def get_default_player_state(user_id: int) -> dict:
     """Returns the initial state for a new player."""

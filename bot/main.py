@@ -29,27 +29,43 @@ if not BOT_TOKEN:
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the /start command. Initializes player data if it doesn't exist."""
     user = update.effective_user
+    logger.info("Entered start_command")
     if not user:
-        return # Should not happen in a private chat command
+        logger.warning("start_command called without user info")
+        return
 
-    logger.info(f"User {user.id} ({user.username}) started the bot.")
+    logger.info(f"User {user.id} ({user.username}) triggered /start.")
 
-    # Load data - this will create default if not exists
-    player_data = game.load_player_data(user.id)
+    try:
+        # Load data - this will create default if not exists
+        logger.info(f"Loading player data for {user.id}...")
+        player_data = game.load_player_data(user.id)
+        logger.info(f"Player data loaded for {user.id}.")
 
-    # Update last login time
-    player_data["last_login_time"] = game.time.time()
-    game.save_player_data(user.id, player_data)
+        # Update last login time
+        player_data["last_login_time"] = game.time.time()
+        logger.info(f"Saving updated player data for {user.id}...")
+        game.save_player_data(user.id, player_data)
+        logger.info(f"Player data saved for {user.id}.")
 
-    await update.message.reply_html(
-        rf"Hi {user.mention_html()}! Welcome to 🍕 Pizza Wars! 🍕" \
-        "\n\nReady to build your pizza empire? Here are the basic commands:" \
-        "\n/status - Check your shops and cash" \
-        "\n/collect - Collect earned income" \
-        "\n/upgrade [location] - Upgrade a shop (e.g., /upgrade Brooklyn)" \
-        "\n/expand [location] - Open a shop in a new area (e.g., /expand Manhattan)"
-        "\n\nUse /status to see where you're at!"
-    )
+        reply_message = (
+            rf"Hi {user.mention_html()}! Welcome to 🍕 Pizza Wars! 🍕" \
+            "\n\nReady to build your pizza empire? Here are the basic commands:" \
+            "\n/status - Check your shops and cash" \
+            "\n/collect - Collect earned income" \
+            "\n/upgrade [location] - Upgrade a shop (e.g., /upgrade Brooklyn)" \
+            "\n/expand [location] - Open a shop in a new area (e.g., /expand Manhattan)" \
+            "\n\nUse /status to see where you're at!"
+        )
+
+        logger.info(f"Attempting to send reply to {user.id}...")
+        await update.message.reply_html(reply_message)
+        logger.info(f"Reply sent successfully to {user.id}.")
+
+    except Exception as e:
+        logger.error(f"ERROR in start_command for user {user.id}: {e}", exc_info=True)
+        # Optionally notify user of error
+        # await update.message.reply_text("Oops! Something went wrong processing your request.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the /status command. Displays player status."""
@@ -141,9 +157,12 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main() -> None:
     """Start the bot."""
+    logger.info("Building Telegram Application...")
     # Create the Application and pass it your bot's token.
     application = Application.builder().token(BOT_TOKEN).build()
+    logger.info("Telegram Application built successfully.")
 
+    logger.info("Adding command handlers...")
     # Add command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("status", status_command))
