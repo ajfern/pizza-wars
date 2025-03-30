@@ -5,11 +5,67 @@ import random
 from pathlib import Path
 import logging
 from datetime import datetime, timedelta
+import urllib.parse as urlparse
+import psycopg2
+import psycopg2.extras # For JSONB support
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path("player_data")
-DATA_DIR.mkdir(exist_ok=True)
+# --- Database Setup ---
+DATABASE_URL = os.getenv('DATABASE_URL')
+_db_conn = None # Simple connection caching
+
+def get_db_connection():
+    """Establishes or reuses a database connection."""
+    global _db_conn
+    if not DATABASE_URL:
+        logger.critical("DATABASE_URL environment variable not set!")
+        raise ConnectionError("Database URL not configured.")
+
+    # Check if connection is alive, otherwise reconnect
+    if _db_conn is None or _db_conn.closed != 0:
+        try:
+            logger.info("Attempting to connect to the database...")
+            _db_conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+            psycopg2.extras.register_default_jsonb(conn_or_curs=_db_conn, globally=True) # Ensure JSONB is handled correctly
+            logger.info("Database connection successful.")
+        except psycopg2.DatabaseError as e:
+            logger.critical(f"Database connection failed: {e}", exc_info=True)
+            _db_conn = None # Reset on failure
+            raise # Re-raise the exception
+    return _db_conn
+
+def initialize_database():
+    """Creates the players table if it doesn't exist."""
+    logger.info("Initializing database schema...")
+    conn = get_db_connection()
+    if not conn:
+        logger.error("Cannot initialize database without a connection.")
+        return
+
+    create_table_sql = """
+    CREATE TABLE IF NOT EXISTS players (
+        user_id BIGINT PRIMARY KEY,
+        cash NUMERIC(18, 4) DEFAULT 0.0,
+        pizza_coins INTEGER DEFAULT 0,
+        shops JSONB DEFAULT '{}'::jsonb,
+        unlocked_achievements TEXT[] DEFAULT ARRAY[]::TEXT[],
+        current_title TEXT,
+        active_challenges JSONB DEFAULT '{}'::jsonb,
+        challenge_progress JSONB DEFAULT '{}'::jsonb,
+        stats JSONB DEFAULT '{}'::jsonb,
+        total_income_earned NUMERIC(18, 4) DEFAULT 0.0,
+        last_login_time TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(create_table_sql)
+        conn.commit()
+        logger.info("Players table checked/created successfully.")
+    except psycopg2.DatabaseError as e:
+        logger.error(f"Error initializing database table: {e}", exc_info=True)
+        conn.rollback() # Rollback any partial changes
 
 # --- Game Constants ---
 INITIAL_CASH = 10
@@ -57,101 +113,176 @@ CHALLENGE_TYPES = {
     "expand_shops": ("Expand to {goal} new location(s) {timescale}", "session_expansions", None, 1, 1.1, 'pizza_coins', 50, 1.4) # Requires tracking expansions
 }
 
-# --- Player Data Management ---
+# --- Database Player Data Management ---
 
-def get_player_data_path(user_id: int) -> Path:
-    """Returns the path to the player's data file."""
-    return DATA_DIR / f"{user_id}.json"
+def load_player_data(user_id: int) -> dict | None:
+    """Loads player data from the database. Returns default state if not found."""
+    logger.debug(f"Attempting to load data for user {user_id} from database.")
+    conn = get_db_connection()
+    if not conn: return get_default_player_state(user_id) # Return default if DB fails initially
 
-def load_player_data(user_id: int) -> dict:
-    """Loads player data from JSON file. Returns default if not found."""
-    filepath = get_player_data_path(user_id)
-    logger.debug(f"Attempting to load data for {user_id} from {filepath}")
-    if filepath.exists():
-        try:
-            with open(filepath, 'r') as f:
-                data = json.load(f)
-            logger.debug(f"Successfully loaded raw data for {user_id}.")
-            # --- Migration for new fields --- #
-            if "unlocked_achievements" not in data:
-                data["unlocked_achievements"] = []
-            if "current_title" not in data:
-                data["current_title"] = None
-            if "active_challenges" not in data:
-                data["active_challenges"] = {"daily": None, "weekly": None}
-            if "challenge_progress" not in data:
-                data["challenge_progress"] = {"daily": {}, "weekly": {}}
-            if "stats" not in data: # Add general stats tracking
-                 data["stats"] = {
-                     "session_income": 0,
-                     "session_upgrades": 0,
-                     "session_collects": 0,
-                     "session_expansions": 0
-                 }
-            # --- End Migration --- #
-            return data
-        except (json.JSONDecodeError, OSError) as e:
-            logger.error(f"Error loading data for {user_id}: {e}. Returning default state.")
-            return get_default_player_state(user_id)
-    else:
-        logger.info(f"No data file found for {user_id}. Returning default state.")
-        return get_default_player_state(user_id)
+    sql = """
+    SELECT cash, pizza_coins, shops, unlocked_achievements, current_title,
+           active_challenges, challenge_progress, stats, total_income_earned, last_login_time
+    FROM players WHERE user_id = %s;
+    """
+    default_state = get_default_player_state(user_id)
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (user_id,))
+            result = cur.fetchone()
+
+        if result:
+            logger.debug(f"Found existing player data for {user_id}.")
+            # Map database columns back to dictionary structure
+            player_data = {
+                "user_id": user_id,
+                "cash": float(result[0]), # Convert NUMERIC back to float
+                "pizza_coins": result[1],
+                "shops": result[2] if result[2] is not None else {},
+                "unlocked_achievements": result[3] if result[3] is not None else [],
+                "current_title": result[4],
+                "active_challenges": result[5] if result[5] is not None else {'daily': None, 'weekly': None},
+                "challenge_progress": result[6] if result[6] is not None else {'daily': {}, 'weekly': {}},
+                "stats": result[7] if result[7] is not None else {},
+                "total_income_earned": float(result[8]), # Convert NUMERIC back to float
+                "last_login_time": result[9].timestamp() if result[9] else time.time() # Convert timestamp
+            }
+            # Ensure default sub-dicts/lists if DB had nulls that weren't caught by DEFAULT
+            player_data.setdefault("active_challenges", {'daily': None, 'weekly': None})
+            player_data.setdefault("challenge_progress", {'daily': {}, 'weekly': {}})
+            player_data.setdefault("stats", {})
+            player_data['stats'].setdefault('session_income', 0)
+            player_data['stats'].setdefault('session_upgrades', 0)
+            player_data['stats'].setdefault('session_collects', 0)
+            player_data['stats'].setdefault('session_expansions', 0)
+            return player_data
+        else:
+            logger.info(f"No player data found for {user_id}. Inserting default state.")
+            # Insert default state for new player
+            save_player_data(user_id, default_state) # Use save function to insert
+            return default_state
+
+    except psycopg2.DatabaseError as e:
+        logger.error(f"Database error loading data for {user_id}: {e}", exc_info=True)
+        conn.rollback()
+        # Fallback strategy: return default state without saving
+        return default_state
+    except Exception as e:
+         logger.error(f"Unexpected error loading data for {user_id}: {e}", exc_info=True)
+         return default_state # General fallback
 
 def save_player_data(user_id: int, data: dict) -> None:
-    """Saves player data to JSON file."""
-    filepath = get_player_data_path(user_id)
-    logger.debug(f"Attempting to save data for {user_id} to {filepath}")
-    try:
-        # Ensure consistent structure before saving
-        data.setdefault("unlocked_achievements", [])
-        data.setdefault("current_title", None)
-        data.setdefault("active_challenges", {"daily": None, "weekly": None})
-        data.setdefault("challenge_progress", {"daily": {}, "weekly": {}})
-        data.setdefault("stats", {})
-        data["stats"].setdefault("session_income", 0)
-        data["stats"].setdefault("session_upgrades", 0)
-        data["stats"].setdefault("session_collects", 0)
-        data["stats"].setdefault("session_expansions", 0)
+    """Saves player data to the database using INSERT ON CONFLICT (upsert)."""
+    logger.debug(f"Attempting to save data for user {user_id} to database.")
+    conn = get_db_connection()
+    if not conn:
+        logger.error(f"Cannot save data for {user_id}, no database connection.")
+        return
 
-        with open(filepath, 'w') as f:
-            json.dump(data, f, indent=4)
-        logger.debug(f"Successfully saved data for {user_id}.")
-    except OSError as e:
-        logger.error(f"Error saving data for {user_id} to {filepath}: {e}")
+    # Ensure necessary top-level keys exist with defaults before saving
+    data.setdefault("cash", 0.0)
+    data.setdefault("pizza_coins", 0)
+    data.setdefault("shops", {})
+    data.setdefault("unlocked_achievements", [])
+    data.setdefault("current_title", None)
+    data.setdefault("active_challenges", {'daily': None, 'weekly': None})
+    data.setdefault("challenge_progress", {'daily': {}, 'weekly': {}})
+    data.setdefault("stats", {})
+    data.setdefault("total_income_earned", 0.0)
+    data.setdefault("last_login_time", time.time()) # Use current time if missing
+
+    # Ensure default sub-dicts/lists for JSONB compatibility
+    data["shops"] = data.get("shops") or {}
+    data["unlocked_achievements"] = data.get("unlocked_achievements") or []
+    data["active_challenges"] = data.get("active_challenges") or {'daily': None, 'weekly': None}
+    data["challenge_progress"] = data.get("challenge_progress") or {'daily': {}, 'weekly': {}}
+    data["stats"] = data.get("stats") or {}
+    data['stats'].setdefault('session_income', 0)
+    data['stats'].setdefault('session_upgrades', 0)
+    data['stats'].setdefault('session_collects', 0)
+    data['stats'].setdefault('session_expansions', 0)
+
+    sql = """
+    INSERT INTO players (
+        user_id, cash, pizza_coins, shops, unlocked_achievements, current_title,
+        active_challenges, challenge_progress, stats, total_income_earned, last_login_time
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s))
+    ON CONFLICT (user_id) DO UPDATE SET
+        cash = EXCLUDED.cash,
+        pizza_coins = EXCLUDED.pizza_coins,
+        shops = EXCLUDED.shops,
+        unlocked_achievements = EXCLUDED.unlocked_achievements,
+        current_title = EXCLUDED.current_title,
+        active_challenges = EXCLUDED.active_challenges,
+        challenge_progress = EXCLUDED.challenge_progress,
+        stats = EXCLUDED.stats,
+        total_income_earned = EXCLUDED.total_income_earned,
+        last_login_time = EXCLUDED.last_login_time;
+    """
+    try:
+        # Convert complex types to JSON strings for psycopg2 if needed,
+        # though register_default_jsonb should handle dicts/lists directly.
+        shops_json = json.dumps(data["shops"])
+        achievements_list = data["unlocked_achievements"] # Keep as list for TEXT[]
+        active_challenges_json = json.dumps(data["active_challenges"])
+        challenge_progress_json = json.dumps(data["challenge_progress"])
+        stats_json = json.dumps(data["stats"])
+
+        with conn.cursor() as cur:
+            cur.execute(sql, (
+                user_id,
+                data["cash"],
+                data["pizza_coins"],
+                shops_json,
+                achievements_list,
+                data["current_title"],
+                active_challenges_json,
+                challenge_progress_json,
+                stats_json,
+                data["total_income_earned"],
+                data["last_login_time"] # Pass timestamp float
+            ))
+        conn.commit()
+        logger.debug(f"Successfully saved data for user {user_id}.")
+    except psycopg2.DatabaseError as e:
+        logger.error(f"Database error saving data for {user_id}: {e}", exc_info=True)
+        conn.rollback()
+    except Exception as e:
+        logger.error(f"Unexpected error saving data for {user_id}: {e}", exc_info=True)
+        # Attempt rollback just in case
+        try:
+            conn.rollback()
+        except psycopg2.InterfaceError: # If connection already closed
+             pass
 
 def get_default_player_state(user_id: int) -> dict:
-    """Returns the initial state for a new player."""
-    logger.info(f"Creating default state for user {user_id}")
+    """Returns the initial state dictionary for a new player."""
+    logger.info(f"Generating default state dictionary for user {user_id}")
     return {
         "user_id": user_id,
-        "cash": INITIAL_CASH,
+        "cash": float(INITIAL_CASH),
         "pizza_coins": 0,
         "shops": {
             INITIAL_SHOP_NAME: {
                 "level": 1,
+                # Store last_collected_time within the shop dict (as before)
+                # It will be saved as part of the shops JSONB
                 "last_collected_time": time.time()
             }
         },
-        "unlocked_expansions": list(EXPANSION_LOCATIONS.keys()),
-        "total_income_earned": 0,
+        "unlocked_achievements": [],
+        "current_title": None,
+        "active_challenges": {'daily': None, 'weekly': None},
+        "challenge_progress": {'daily': {}, 'weekly': {}},
+        "stats": {
+            'session_income': 0, 'session_upgrades': 0,
+            'session_collects': 0, 'session_expansions': 0
+        },
+        "total_income_earned": 0.0,
         "last_login_time": time.time(),
-        # Achievements & Challenges
-        "unlocked_achievements": [], # List of achievement IDs
-        "current_title": None, # Highest unlocked title
-        "active_challenges": { # Current challenges {timescale: challenge_data}
-            "daily": None,
-            "weekly": None
-        },
-        "challenge_progress": { # Current progress {timescale: {metric: value}}
-            "daily": {},
-            "weekly": {}
-        },
-        "stats": { # Stats tracked for challenges/achievements within a period (reset with challenges)
-            "session_income": 0,
-            "session_upgrades": 0,
-            "session_collects": 0,
-            "session_expansions": 0
-        }
     }
 
 # --- Income Calculation (Modified for stats) ---
