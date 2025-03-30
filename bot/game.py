@@ -452,7 +452,7 @@ def format_status(player_data: dict) -> str:
     title = player_data.get("current_title", None)
     achievements_unlocked = len(player_data.get("unlocked_achievements", []))
 
-    title_str = f" Title: <{title}>" if title else ""
+    title_str = f" Title: &lt;{title}&gt;" if title else ""
 
     status_lines = [
         f"<b>--- Player Status (ID: {user_id}{title_str}) ---</b>",
