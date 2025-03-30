@@ -148,7 +148,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"🍕 Ay-oh, Pizza Boss {user.mention_html()}! Welcome to Pizza Empire, where dough rules everything around me!\n\n"
             f"Here's how ya slice up the competition:\n"
             f"- Collect piles of cash automatically (because who has time for work?). Type /collect to scoop up your dough!\n"
-            f"- Upgrade those pizza joints (/upgrade \<shop_location\>) to rake in more cheddar.\n"
+            f"- Upgrade those pizza joints (/upgrade &lt;shop_location&gt;) to rake in more cheddar.\n"
             f"- Dominate from Brooklyn to the whole freakin' planet by hittin' big pizza milestones.\n\n"
             f"Now, get cookin', capisce? Check your /status!"
         )
