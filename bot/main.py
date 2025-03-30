@@ -341,12 +341,31 @@ async def expand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Whoa there! Somethin' went sideways tryin' to expand.")
 
 async def challenges_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Displays the player's active daily and weekly challenges and progress."""
+    """Displays the player's active challenges, generating if missing."""
     user = update.effective_user
     if not user:
         return
     logger.info(f"User {user.id} requested challenges.")
     player_data = game.load_player_data(user.id)
+    needs_save = False # Flag to check if we modified data
+
+    # --- Generate challenges on demand if missing --- #
+    if player_data.get("active_challenges", {}).get("daily") is None:
+        logger.info(f"Daily challenge missing for {user.id}, generating on demand.")
+        game.generate_new_challenges(user.id, 'daily')
+        needs_save = True # generate_new_challenges saves, but we need to reload
+
+    if player_data.get("active_challenges", {}).get("weekly") is None:
+        logger.info(f"Weekly challenge missing for {user.id}, generating on demand.")
+        game.generate_new_challenges(user.id, 'weekly')
+        needs_save = True
+
+    # Reload data if we generated any challenges
+    if needs_save:
+        logger.info(f"Reloading player data for {user.id} after on-demand generation.")
+        player_data = game.load_player_data(user.id)
+    # --- End generation on demand --- #
+
     stats = player_data.get("stats", {})
     active_challenges = player_data.get("active_challenges", {})
     challenge_progress = player_data.get("challenge_progress", {})
@@ -369,7 +388,8 @@ async def challenges_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             lines.append(f"  - {challenge['description']}{status_str}")
             lines.append(f"    Reward: {challenge['reward_value']} {challenge['reward_type'].upper()}")
         else:
-            lines.append("  None active. Check back later!")
+            # This case should ideally not happen now, but keep as fallback
+            lines.append("  Error generating challenge. Check logs or try again later.")
 
     await update.message.reply_html("\n".join(lines))
 
