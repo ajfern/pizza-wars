@@ -263,12 +263,35 @@ def format_status(player_data: dict) -> str:
 # --- Placeholder for Premium Currency/Payments ---
 # This section would interact with Telegram Payments API
 
+# Define Pizza Coin Packs (ID: (Name, Description, Price in Cents, Coin Amount))
+PIZZA_COIN_PACKS = {
+    "pack_small": ("Small Coin Pack", "A small boost for your empire!", 99, 100),
+    "pack_medium": ("Medium Coin Pack", "A helpful amount of coins.", 499, 550),
+    "pack_large": ("Large Coin Pack", "Rule the pizza world!", 999, 1200),
+}
+
+def get_pizza_coin_pack(pack_id: str) -> tuple | None:
+    """Returns the details of a specific pizza coin pack."""
+    return PIZZA_COIN_PACKS.get(pack_id)
+
+def credit_pizza_coins(user_id: int, amount: int):
+    """Adds purchased pizza coins to the player's state."""
+    if amount <= 0:
+        logger.warning(f"Attempted to credit non-positive coin amount ({amount}) for user {user_id}")
+        return
+    try:
+        player_data = load_player_data(user_id)
+        player_data["pizza_coins"] = player_data.get("pizza_coins", 0) + amount
+        save_player_data(user_id, player_data)
+        logger.info(f"Successfully credited {amount} Pizza Coins to user {user_id}. New balance: {player_data['pizza_coins']}")
+    except Exception as e:
+        logger.error(f"Failed to credit {amount} Pizza Coins to user {user_id}: {e}", exc_info=True)
+
+
 def buy_pizza_coins(user_id: int, amount: int):
+    # --- THIS FUNCTION IS NOW DEPRECATED / REPLACED by /buycoins command logic --- #
     # 1. Initiate payment request via Telegram API
     # 2. On successful payment confirmation (webhook/callback):
-    #    player_data = load_player_data(user_id)
-    #    player_data["pizza_coins"] = player_data.get("pizza_coins", 0) + amount
-    #    save_player_data(user_id, player_data)
     logger.info(f"Placeholder: User {user_id} attempting to buy {amount} Pizza Coins.")
     return "Pizza Coin purchases are coming soon!"
 
