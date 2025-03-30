@@ -1,6 +1,7 @@
 import logging
 import os
 import glob # For finding player data files
+import random # For tips!
 from datetime import time as dt_time, timedelta
 
 # Telegram Core Types
@@ -142,27 +143,25 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         game.save_player_data(user.id, player_data)
         logger.info(f"Player data saved for {user.id}.")
 
+        # --- Saucy Onboarding Instructions --- #
         reply_message = (
-            rf"Hi {user.mention_html()}! Welcome to 🍕 Pizza Wars! 🍕" \
-            "\n\nReady to build your pizza empire? Here are the basic commands:" \
-            "\n/status - Check your shops and cash" \
-            "\n/collect - Collect earned income" \
-            "\n/upgrade [location] - Upgrade a shop" \
-            "\n/expand [location] - Open a shop in a new area" \
-            "\n/challenges - View your active challenges" \
-            "\n/buycoins - Purchase Pizza Coins" \
-            "\n\nUse /status to see where you're at!"
+            f"🍕 Ay-oh, Pizza Boss {user.mention_html()}! Welcome to Pizza Empire, where dough rules everything around me!\n\n"
+            f"Here's how ya slice up the competition:\n"
+            f"- Collect piles of cash automatically (because who has time for work?). Type /collect to scoop up your dough!\n"
+            f"- Upgrade those pizza joints (/upgrade \<shop_location\>) to rake in more cheddar.\n"
+            f"- Dominate from Brooklyn to the whole freakin' planet by hittin' big pizza milestones.\n\n"
+            f"Now, get cookin', capisce? Check your /status!"
         )
 
-        logger.info(f"Attempting to send reply to {user.id}...")
+        logger.info(f"Attempting to send welcome message to {user.id}...")
         await update.message.reply_html(reply_message)
-        logger.info(f"Reply sent successfully to {user.id}.")
+        logger.info(f"Welcome message sent successfully to {user.id}.")
 
-        # Check initial achievements
         await check_and_notify_achievements(user.id, context)
 
     except Exception as e:
         logger.error(f"ERROR in start_command for user {user.id}: {e}", exc_info=True)
+        await update.message.reply_text("Ay, somethin' went wrong gettin' ya started. Try /start again maybe?")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -180,73 +179,150 @@ async def collect_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     logger.info(f"User {user.id} requested collection.")
     try:
         collected_amount, completed_challenges = game.collect_income(user.id)
+        tip_message = ""
 
-        if collected_amount > 0:
-            await update.message.reply_html(f"Collected ${collected_amount:.2f}! 💰")
-            # Check achievements and notify about completed challenges AFTER replying about collection
+        if collected_amount > 0.01:
+            # --- "Just the Tip" Mechanic --- #
+            tip_chance = 0.15 # 15% chance of getting a tip
+            if random.random() < tip_chance:
+                player_data = game.load_player_data(user.id) # Need to reload to add tip
+                # Tip amount relative to current cash? Or income rate? Simple fixed range for now.
+                tip_amount = round(random.uniform(collected_amount * 0.05, collected_amount * 0.2) + random.uniform(5, 50), 2)
+                tip_amount = max(5.0, tip_amount) # Minimum tip
+
+                player_data["cash"] = player_data.get("cash", 0) + tip_amount
+                game.save_player_data(user.id, player_data)
+                tip_message = f"\n🍕 Woah, some wiseguy just tipped you an extra ${tip_amount:.2f} for the 'best slice in town.' You're killin' it!"
+                logger.info(f"User {user.id} received a tip of ${tip_amount:.2f}")
+
+            # --- Cheeky Feedback --- #
+            await update.message.reply_html(f"🤑 Pizza payday, baby! You just grabbed ${collected_amount:.2f} fresh outta the oven!{tip_message}")
+
             await send_challenge_notifications(user.id, completed_challenges, context)
             await check_and_notify_achievements(user.id, context)
         else:
-            await update.message.reply_html("No income to collect right now. Keep those ovens hot! 🔥")
+            await update.message.reply_html("Nothin' to collect, boss. Ovens are cold!")
 
     except Exception as e:
         logger.error(f"Error during collect_command for {user.id}: {e}", exc_info=True)
-        await update.message.reply_text("An error occurred while collecting income.")
+        await update.message.reply_text("Bada bing! Somethin' went wrong collectin' the dough.")
 
 async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user:
-         await update.message.reply_text("Cannot identify user.")
+         await update.message.reply_text("Can't upgrade if I don't know who you are!")
          return
+
+    player_data = game.load_player_data(user.id)
+    shops = player_data.get("shops", {})
+
+    # --- "Talkin' Dough" Clarity --- #
     if not context.args:
-        await update.message.reply_text("Please specify which shop to upgrade. Usage: /upgrade [location_name] (e.g., /upgrade Brooklyn)")
+        if not shops:
+             await update.message.reply_text("You ain't got no shops to upgrade yet, boss! Get started!")
+             return
+
+        lines = ["🤌 Hey Pizza Maestro, thinkin' 'bout upgrades? Here's what's cookin':\n"]
+        for shop_name, shop_data in shops.items():
+            current_level = shop_data.get("level", 1)
+            next_level = current_level + 1
+            upgrade_cost = game.get_upgrade_cost(current_level)
+            current_rate_hr = game.get_shop_income_rate(shop_name, current_level) * 3600
+            next_rate_hr = game.get_shop_income_rate(shop_name, next_level) * 3600
+            lines.append(f"- <b>{shop_name}</b> (Level {current_level} → {next_level}): Costs ya ${upgrade_cost:,.2f}, bumps your earnings from ${current_rate_hr:,.2f}/hr to ${next_rate_hr:,.2f}/hr.")
+            lines.append(f"  Type /upgrade {shop_name.lower()} to toss your dough at it!")
+
+        await update.message.reply_html("\n".join(lines))
         return
 
-    shop_name = " ".join(context.args).strip().title()
-    logger.info(f"User {user.id} attempting to upgrade '{shop_name}'.")
-    if not shop_name:
-         await update.message.reply_text("Please specify which shop to upgrade. Usage: /upgrade [location_name]")
-         return
+    # --- Process Specific Upgrade Request --- #
+    shop_name_arg = " ".join(context.args).strip()
+    # Find the shop matching the argument (case-insensitive)
+    target_shop_name = None
+    for name in shops.keys():
+        if name.lower() == shop_name_arg.lower():
+            target_shop_name = name
+            break
+
+    if not target_shop_name:
+        await update.message.reply_text(f"Whaddya talkin' about? You don't own a shop called '{shop_name_arg}'. Check ya /status.")
+        return
+
+    logger.info(f"User {user.id} attempting to upgrade '{target_shop_name}'.")
 
     try:
-        success, message, completed_challenges = game.upgrade_shop(user.id, shop_name)
-        await update.message.reply_html(message)
+        current_level = shops[target_shop_name].get("level", 1) # Get level before potential success message
+        success, message, completed_challenges = game.upgrade_shop(user.id, target_shop_name)
 
+        # --- Cheeky Feedback --- #
         if success:
-            # Check achievements and notify about completed challenges AFTER replying about upgrade
+            fun_messages = [
+                f"🍾 Hot dang! Your {target_shop_name} spot just hit Level {current_level + 1}. Lines around the block incoming!",
+                f"🤌 Mama mia! {target_shop_name} is now Level {current_level + 1}! More dough, less problems!",
+                f"🎉 Level {current_level + 1} for {target_shop_name}! You're cookin' with gas now!"
+            ]
+            await update.message.reply_html(random.choice(fun_messages))
             await send_challenge_notifications(user.id, completed_challenges, context)
             await check_and_notify_achievements(user.id, context)
+        else:
+            # Send the error message from game.upgrade_shop
+            await update.message.reply_html(message)
 
     except Exception as e:
-        logger.error(f"Error during upgrade_command for {user.id}, shop {shop_name}: {e}", exc_info=True)
-        await update.message.reply_text("An error occurred while upgrading the shop.")
+        logger.error(f"Error during upgrade_command for {user.id}, shop {target_shop_name}: {e}", exc_info=True)
+        await update.message.reply_text("Ay caramba! Somethin' went wrong with the upgrade.")
 
 async def expand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user:
-         await update.message.reply_text("Cannot identify user.")
+         await update.message.reply_text("Who dis? Can't expand if I dunno who you are.")
          return
     if not context.args:
-        await update.message.reply_text("Please specify which location to expand to. Usage: /expand [location_name] (e.g., /expand Manhattan)")
+        # Maybe list available expansions here too?
+        player_data = game.load_player_data(user.id)
+        available = game.get_available_expansions(player_data)
+        if not available:
+            await update.message.reply_text("No new turf available right now, boss. Keep growin'!")
+        else:
+            lines = ["Ready to expand the empire? Here's where you can plant your flag next:"]
+            for loc in available:
+                lines.append(f"- {loc} (Use /expand {loc.lower()})")
+            await update.message.reply_text("\n".join(lines))
         return
 
-    expansion_name = " ".join(context.args).strip().title()
-    logger.info(f"User {user.id} attempting to expand to '{expansion_name}'.")
-    if not expansion_name:
-         await update.message.reply_text("Please specify which location to expand to. Usage: /expand [location_name]")
+    expansion_name_arg = " ".join(context.args).strip()
+    # Check if it's a valid *possible* expansion (case-insensitive)
+    target_expansion_name = None
+    for name in game.EXPANSION_LOCATIONS.keys():
+         if name.lower() == expansion_name_arg.lower():
+              target_expansion_name = name
+              break
+
+    if not target_expansion_name:
+         await update.message.reply_text(f"'{expansion_name_arg}'? Never heard of it. Where's dat? Try checkin' ya /status for available spots.")
          return
 
-    try:
-        success, message = game.expand_shop(user.id, expansion_name)
-        await update.message.reply_html(message)
+    logger.info(f"User {user.id} attempting to expand to '{target_expansion_name}'.")
 
+    try:
+        success, message = game.expand_shop(user.id, target_expansion_name)
+
+        # --- Cheeky Feedback --- #
         if success:
-            # Check achievements AFTER replying about expansion
+            fun_messages = [
+                 f"🗽 Fuggedaboutit! Your pizza empire just hit {target_expansion_name}!",
+                 f"🗺️ You've outgrown the neighborhood? Time to take this pizza circus to {target_expansion_name}!",
+                 f"🍕 Plantin' the flag in {target_expansion_name}! More ovens, more money!"
+            ]
+            await update.message.reply_html(random.choice(fun_messages))
             await check_and_notify_achievements(user.id, context)
+        else:
+            # Send the error message from game.expand_shop
+            await update.message.reply_html(message)
 
     except Exception as e:
-        logger.error(f"Error during expand_command for {user.id}, location {expansion_name}: {e}", exc_info=True)
-        await update.message.reply_text("An error occurred during expansion.")
+        logger.error(f"Error during expand_command for {user.id}, location {target_expansion_name}: {e}", exc_info=True)
+        await update.message.reply_text("Whoa there! Somethin' went sideways tryin' to expand.")
 
 async def challenges_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Displays the player's active daily and weekly challenges and progress."""

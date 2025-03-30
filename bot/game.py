@@ -151,6 +151,12 @@ def calculate_income_rate(shops: dict) -> float:
         total_rate += shop_rate
     return total_rate
 
+def get_shop_income_rate(shop_name: str, level: int) -> float:
+    """Calculates the income rate for a single shop at a specific level."""
+    base_multiplier = EXPANSION_LOCATIONS.get(shop_name, (None, None, 1.0))[2] if shop_name != INITIAL_SHOP_NAME else 1.0
+    shop_rate = (BASE_INCOME_PER_SECOND * level) * base_multiplier
+    return shop_rate
+
 def calculate_uncollected_income(player_data: dict) -> float:
     current_time = time.time()
     total_uncollected = 0.0
