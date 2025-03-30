@@ -327,42 +327,53 @@ def check_achievements(user_id: int) -> list[tuple[str, str, str | None]]:
 
 def generate_new_challenges(user_id: int, timescale: str):
     """Generates new daily or weekly challenges for the player."""
-    player_data = load_player_data(user_id)
-    player_level = len(player_data.get("unlocked_achievements", [])) # Use achievement count as proxy for level
+    logger.info(f"Attempting to generate {timescale} challenge for user {user_id}.")
+    try:
+        player_data = load_player_data(user_id)
+        player_level = len(player_data.get("unlocked_achievements", [])) # Use achievement count as proxy for level
+        logger.debug(f"Player {user_id} level (based on achievements): {player_level}")
 
-    # Choose a random challenge type
-    challenge_type_id = random.choice(list(CHALLENGE_TYPES.keys()))
-    desc_template, metric, _, base_goal, goal_mult, reward_type, base_reward, reward_mult = CHALLENGE_TYPES[challenge_type_id]
+        # Choose a random challenge type
+        challenge_type_id = random.choice(list(CHALLENGE_TYPES.keys()))
+        logger.debug(f"Selected challenge type for {user_id} ({timescale}): {challenge_type_id}")
+        desc_template, metric, _, base_goal, goal_mult, reward_type, base_reward, reward_mult = CHALLENGE_TYPES[challenge_type_id]
 
-    # Scale goal and reward based on player level (simple example)
-    goal = int(base_goal * (goal_mult ** player_level))
-    reward_value = int(base_reward * (reward_mult ** player_level))
+        # Scale goal and reward based on player level (simple example)
+        goal = int(base_goal * (goal_mult ** player_level))
+        reward_value = int(base_reward * (reward_mult ** player_level))
+        logger.debug(f"Calculated goal: {goal}, reward: {reward_value} for {user_id} ({timescale})")
 
-    # Prevent excessively easy goals
-    if "cash" in metric and goal < 100: goal = 100
-    if "upgrade" in metric and goal < 1: goal = 1
-    if "collect" in metric and goal < 2: goal = 2
+        # Prevent excessively easy goals
+        if "cash" in metric and goal < 100: goal = 100
+        if "upgrade" in metric and goal < 1: goal = 1
+        if "collect" in metric and goal < 2: goal = 2
 
-    description = desc_template.format(goal=goal, timescale=timescale)
+        description = desc_template.format(goal=goal, timescale=timescale)
+        logger.debug(f"Formatted description: {description}")
 
-    challenge_data = {
-        "id": f"{timescale}_{challenge_type_id}_{int(time.time())}", # Unique ID
-        "type": challenge_type_id,
-        "description": description,
-        "metric": metric,
-        "goal": goal,
-        "reward_type": reward_type,
-        "reward_value": reward_value,
-        "start_time": time.time(),
-        "timescale": timescale
-    }
+        challenge_data = {
+            "id": f"{timescale}_{challenge_type_id}_{int(time.time())}", # Unique ID
+            "type": challenge_type_id,
+            "description": description,
+            "metric": metric,
+            "goal": goal,
+            "reward_type": reward_type,
+            "reward_value": reward_value,
+            "start_time": time.time(),
+            "timescale": timescale
+        }
 
-    player_data["active_challenges"][timescale] = challenge_data
-    player_data["challenge_progress"][timescale] = {} # Reset progress for this timescale
-    player_data["stats"] = {k: 0 for k in player_data["stats"]} # Reset tracked stats
+        player_data["active_challenges"][timescale] = challenge_data
+        player_data["challenge_progress"][timescale] = {} # Reset progress for this timescale
+        player_data["stats"] = {k: 0 for k in player_data["stats"]} # Reset tracked stats
+        logger.debug(f"Updated player_data challenge/stats for {user_id} ({timescale})")
 
-    logger.info(f"Generated new {timescale} challenge for user {user_id}: {description} (Goal: {goal} {metric}, Reward: {reward_value} {reward_type})")
-    save_player_data(user_id, player_data)
+        logger.info(f"Generated new {timescale} challenge for user {user_id}: {description} (Goal: {goal} {metric}, Reward: {reward_value} {reward_type})")
+        save_player_data(user_id, player_data)
+        logger.info(f"Successfully saved player data after {timescale} challenge generation for {user_id}.")
+    except Exception as e:
+        logger.error(f"ERROR during generate_new_challenges for user {user_id}, timescale {timescale}: {e}", exc_info=True)
+        # Re-raise or handle appropriately? For now, just log.
 
 def update_challenge_progress(player_data: dict, updated_metrics: list[str]) -> list[str]:
     """Updates progress for active challenges based on player stats and returns messages for completed challenges."""
