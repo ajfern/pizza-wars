@@ -281,6 +281,7 @@ def main() -> None:
     application.add_handler(CommandHandler("collect", collect_command))
     application.add_handler(CommandHandler("upgrade", upgrade_command))
     application.add_handler(CommandHandler("expand", expand_command))
+    application.add_handler(CommandHandler("buycoins", buy_coins_command))
 
     # Add payment handlers
     logger.info("Adding payment handlers...")
