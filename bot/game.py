@@ -411,11 +411,13 @@ def upgrade_shop(user_id: int, shop_name: str) -> tuple[bool, str, list[str]]:
         # Save the data with deducted cash, but no level increase or stats update
         save_player_data(user_id, player_data)
         # Return False and the cost (so main.py can mention it in the failure message)
-        return False, f"Oh no! The upgrade failed! You lost ${cost:,.2f} in the attempt!", []
+        return False, f"Oh no! The upgrade failed! You lost ${cost:,.2f} in the attempt!", [] # Specific message format
     else:
         # --- Success --- #
         logger.info(f"Upgrade SUCCEEDED for user {user_id} on {shop_name} Lvl {current_level}.")
-        player_data["shops"][shop_name]["level"] = current_level + 1
+        new_level = current_level + 1
+        player_data["shops"][shop_name]["level"] = new_level
+        # Only update stats on success
         player_data["stats"]["session_upgrades"] = player_data["stats"].get("session_upgrades", 0) + 1
 
         # Check challenges after successful upgrade
@@ -423,10 +425,8 @@ def upgrade_shop(user_id: int, shop_name: str) -> tuple[bool, str, list[str]]:
 
         save_player_data(user_id, player_data)
 
-        income_rate = calculate_income_rate(player_data["shops"])
-        # Return True and standard success info (main.py handles the cheeky message)
-        msg = f"Upgrade successful for {shop_name} to Level {current_level + 1}. Cost: ${cost:.2f}. New total income rate: ${income_rate:.2f}/sec."
-        return True, msg, completed_challenges
+        # Return True and the new level as a string
+        return True, str(new_level), completed_challenges
 
 def get_available_expansions(player_data: dict) -> list[str]:
     available = []

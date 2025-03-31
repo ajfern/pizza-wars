@@ -303,33 +303,39 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     logger.info(f"User {user.id} attempting to upgrade '{target_shop_name}'.")
 
     try:
-        current_level = shops[target_shop_name].get("level", 1)
-        # upgrade_shop now returns cost info in message on failure
-        success, result_message, completed_challenges = game.upgrade_shop(user.id, target_shop_name)
+        # upgrade_shop now returns (success, message_or_new_level_str, completed_challenges)
+        success, result_data, completed_challenges = game.upgrade_shop(user.id, target_shop_name)
 
         if success:
             # --- Cheeky SUCCESS Feedback --- #
+            new_level = result_data # On success, result_data is the new level string
             fun_messages = [
-                f"🍾 Hot dang! Your {target_shop_name} spot just hit Level {current_level + 1}. Lines around the block incoming!",
-                f"🤌 Mama mia! {target_shop_name} is now Level {current_level + 1}! More dough, less problems!",
-                f"🎉 Level {current_level + 1} for {target_shop_name}! You're cookin' with gas now!"
+                f"🍾 Hot dang! Your {target_shop_name} spot just hit Level {new_level}. Lines around the block incoming!",
+                f"🤌 Mama mia! {target_shop_name} is now Level {new_level}! More dough, less problems!",
+                f"🎉 Level {new_level} for {target_shop_name}! You're cookin' with gas now!"
             ]
             await update.message.reply_html(random.choice(fun_messages))
             await send_challenge_notifications(user.id, completed_challenges, context)
             await check_and_notify_achievements(user.id, context)
         else:
-            # --- Dramatic FAILURE Feedback --- #
-            # Check if it was the 'Not enough cash' error or the random failure
-            if "Not enough cash" in result_message:
-                 await update.message.reply_html(result_message) # Send the standard message
+            # --- Handle FAILURE --- #
+            failure_message = result_data # On failure, result_data is the message from game.py
+            if "Not enough cash" in failure_message:
+                 await update.message.reply_html(failure_message) # Send the standard insufficient funds message
             else:
                  # It was a random failure, use dramatic messages
-                 cost_lost_str = result_message.split("lost ")[-1].split(" in")[0] # Extract cost from message
+                 # Extract cost from the specific failure message format
+                 cost_lost_str = "the cost" # Default fallback
+                 try:
+                      cost_lost_str = failure_message.split("lost ")[-1].split(" in")[0]
+                 except IndexError:
+                      logger.warning(f"Could not parse cost from failure message: {failure_message}")
+
                  failure_messages = [
-                      f"💥 KABOOM! The contractors messed up! The upgrade failed and ${cost_lost_str} went up in smoke!",
-                      f"😱 Mamma Mia! A sinkhole swallowed the construction crew! Upgrade failed, dough is gone (${cost_lost_str})!",
-                      f"📉 Bad investment, boss! The upgrade for {target_shop_name} flopped harder than a soggy pizza base. Lost ${cost_lost_str}!",
-                      f"🔥 Grease fire! The whole upgrade went belly-up. Kiss ${cost_lost_str} goodbye!"
+                      f"💥 KABOOM! The contractors messed up! The upgrade failed and {cost_lost_str} went up in smoke!",
+                      f"😱 Mamma Mia! A sinkhole swallowed the construction crew! Upgrade failed, dough is gone ({cost_lost_str})!",
+                      f"📉 Bad investment, boss! The upgrade for {target_shop_name} flopped harder than a soggy pizza base. Lost {cost_lost_str}!",
+                      f"🔥 Grease fire! The whole upgrade went belly-up. Kiss {cost_lost_str} goodbye!"
                  ]
                  await update.message.reply_html(random.choice(failure_messages))
 
