@@ -92,44 +92,47 @@ async def update_player_display_name(user_id: int, user: "telegram.User | None")
 
 # --- Scheduled Job Functions ---
 async def generate_daily_challenges_job(context: ContextTypes.DEFAULT_TYPE):
-    """Scheduled job to generate daily challenges for all known players."""
+    """Scheduled job to generate daily challenges for all players in DB."""
     logger.info("Running daily challenge generation job...")
-    player_files = glob.glob(os.path.join(game.DATA_DIR, "*.json"))
-    active_users_today = 0
-    for filepath in player_files:
-        try:
-            user_id = int(os.path.basename(filepath).split('.')[0])
-            # Optional: Add logic here to only generate for recently active players
-            # player_data = game.load_player_data(user_id)
-            # if time.time() - player_data.get('last_login_time', 0) < timedelta(days=7).total_seconds():
-            game.generate_new_challenges(user_id, 'daily')
-            active_users_today += 1
-            # Notify user of new challenge?
-            # try:
-            #     player_data = game.load_player_data(user_id) # Reload to get new challenge
-            #     challenge_desc = player_data.get("active_challenges", {}).get("daily", {}).get("description")
-            #     if challenge_desc:
-            #          await context.bot.send_message(user_id, f"☀️ Your new daily challenge is: \n"{challenge_desc}"")
-            # except Exception as notify_err:
-            #      logger.warning(f"Failed to notify user {user_id} of new daily challenge: {notify_err}")
-        except (ValueError, Exception) as e:
-            logger.error(f"Error processing daily challenge for file {filepath}: {e}")
-    logger.info(f"Daily challenge generation complete. Generated for {active_users_today} users.")
+    try:
+        user_ids = game.get_all_user_ids() # <<< Use DB function
+        if not user_ids:
+            logger.info("No players found in database for daily challenge generation.")
+            return
+
+        generated_count = 0
+        for user_id in user_ids:
+            try:
+                # Optional: Add activity check here if desired
+                game.generate_new_challenges(user_id, 'daily')
+                generated_count += 1
+                # Optional: Notify user (consider rate limiting if many users)
+            except Exception as e:
+                logger.error(f"Error generating daily challenge for user {user_id}: {e}", exc_info=True)
+        logger.info(f"Daily challenge generation complete. Processed for {generated_count}/{len(user_ids)} users.")
+    except Exception as e:
+        logger.error(f"Failed to fetch user IDs for daily challenge job: {e}", exc_info=True)
 
 async def generate_weekly_challenges_job(context: ContextTypes.DEFAULT_TYPE):
-    """Scheduled job to generate weekly challenges for all known players."""
+    """Scheduled job to generate weekly challenges for all players in DB."""
     logger.info("Running weekly challenge generation job...")
-    player_files = glob.glob(os.path.join(game.DATA_DIR, "*.json"))
-    active_users_week = 0
-    for filepath in player_files:
-        try:
-            user_id = int(os.path.basename(filepath).split('.')[0])
-            game.generate_new_challenges(user_id, 'weekly')
-            active_users_week += 1
-             # Notify user?
-        except (ValueError, Exception) as e:
-            logger.error(f"Error processing weekly challenge for file {filepath}: {e}")
-    logger.info(f"Weekly challenge generation complete. Generated for {active_users_week} users.")
+    try:
+        user_ids = game.get_all_user_ids() # <<< Use DB function
+        if not user_ids:
+            logger.info("No players found in database for weekly challenge generation.")
+            return
+
+        generated_count = 0
+        for user_id in user_ids:
+            try:
+                game.generate_new_challenges(user_id, 'weekly')
+                generated_count += 1
+                # Optional: Notify user
+            except Exception as e:
+                logger.error(f"Error generating weekly challenge for user {user_id}: {e}", exc_info=True)
+        logger.info(f"Weekly challenge generation complete. Processed for {generated_count}/{len(user_ids)} users.")
+    except Exception as e:
+        logger.error(f"Failed to fetch user IDs for weekly challenge job: {e}", exc_info=True)
 
 # --- Command Handlers ---
 

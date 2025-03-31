@@ -288,6 +288,24 @@ def save_player_data(user_id: int, data: dict) -> None:
         except psycopg2.InterfaceError: # If connection already closed
              pass
 
+def get_all_user_ids() -> list[int]:
+    """Fetches all user IDs from the players table."""
+    logger.debug("Fetching all user IDs from database.")
+    conn = get_db_connection()
+    if not conn: return []
+    results = []
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT user_id FROM players;")
+            results = [row[0] for row in cur.fetchall()]
+        logger.debug(f"Fetched {len(results)} user IDs.")
+    except psycopg2.DatabaseError as e:
+        logger.error(f"Database error fetching all user IDs: {e}", exc_info=True)
+        conn.rollback()
+    except Exception as e:
+        logger.error(f"Unexpected error fetching all user IDs: {e}", exc_info=True)
+    return results
+
 def get_default_player_state(user_id: int) -> dict:
     """Returns the initial state dictionary for a new player."""
     logger.info(f"Generating default state dictionary for user {user_id}")
