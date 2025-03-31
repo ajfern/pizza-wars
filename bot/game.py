@@ -285,6 +285,7 @@ def get_default_player_state(user_id: int) -> dict:
     logger.info(f"Generating default state dictionary for user {user_id}")
     return {
         "user_id": user_id,
+        "display_name": None,
         "cash": float(INITIAL_CASH),
         "pizza_coins": 0,
         "shops": {
@@ -433,7 +434,7 @@ def get_available_expansions(player_data: dict) -> list[str]:
     initial_shop_level = owned_shops.get(INITIAL_SHOP_NAME, {}).get("level", 1)
     total_income = player_data.get("total_income_earned", 0)
 
-    for name, (req_type, req_value, _) in EXPANSION_LOCATIONS.items():
+    for name, (req_type, req_value, _income_mult, _cost_scale) in EXPANSION_LOCATIONS.items():
         if name in owned_shops:
             continue
         met_requirement = False
@@ -460,7 +461,7 @@ def expand_shop(user_id: int, expansion_name: str) -> tuple[bool, str, list[str]
         return False, f"You already have a shop in {expansion_name}!", []
 
     if expansion_name not in available_expansions:
-        req_type, req_value, _ = EXPANSION_LOCATIONS[expansion_name]
+        req_type, req_value, _income_mult, _cost_scale = EXPANSION_LOCATIONS[expansion_name]
         if req_type == "level":
             return False, f"You can't expand to {expansion_name} yet. Requires {INITIAL_SHOP_NAME} to be Level {req_value}.", []
         elif req_type == "total_income":
@@ -665,9 +666,9 @@ def format_status(player_data: dict) -> str:
     status_lines.append("<b>Available Expansions:</b>")
     if available_expansions:
         for loc in available_expansions:
-             req_type, req_value, mult = EXPANSION_LOCATIONS[loc]
-             req_str = f"(Req: {INITIAL_SHOP_NAME} Lvl {req_value})" if req_type == "level" else f"(Req: Total Earned ${req_value:,.2f})"
-             status_lines.append(f"  - {loc} {req_str} - Use /expand {loc}")
+             req_type, req_value, _income_mult, _cost_scale = EXPANSION_LOCATIONS[loc]
+             req_str = f"(Req: {INITIAL_SHOP_NAME} Lvl {req_value})" if req_type == "level" else f"(Req: Total Earned ${req_value:,.2f})" if req_type == "total_income" else f"(Req: {req_value} Shops)"
+             status_lines.append(f"  - {loc} {req_str} - Use /expand {loc.lower()}")
     else:
         status_lines.append("  None available right now. Keep upgrading!")
 
