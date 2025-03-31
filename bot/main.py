@@ -5,7 +5,7 @@ import random # For tips!
 from datetime import time as dt_time, timedelta
 
 # Telegram Core Types
-from telegram import Update, LabeledPrice, ShippingOption, Invoice
+from telegram import Update, LabeledPrice, ShippingOption, Invoice, InlineKeyboardButton, InlineKeyboardMarkup
 # Telegram Constants & Filters
 from telegram.constants import ChatAction # Maybe useful later?
 # Telegram Extensions
@@ -17,6 +17,7 @@ from telegram.ext import (
     filters,
     PreCheckoutQueryHandler,
     ShippingQueryHandler,
+    CallbackQueryHandler,
 )
 
 # Scheduling
@@ -221,35 +222,65 @@ async def collect_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user = update.effective_user
     if not user:
         return
-    await update_player_display_name(user.id, user) # <-- Update name on collect
+    await update_player_display_name(user.id, user)
     logger.info(f"User {user.id} requested collection.")
-    try:
-        collected_amount, completed_challenges = game.collect_income(user.id)
-        tip_message = ""
-        pineapple_message = "" # <-- Initialize pineapple message
 
-        if collected_amount > 0.01:
-            # --- "Just the Tip" Mechanic --- #
-            tip_chance = 0.15 # 15% chance of getting a tip
+    try:
+        # collect_income now returns: (collected_amount, completed_challenges, is_mafia_event, mafia_demand)
+        collected_amount, completed_challenges, is_mafia_event, mafia_demand = game.collect_income(user.id)
+
+        if is_mafia_event:
+            # --- MAFIA EVENT --- # 
+            if mafia_demand is None or mafia_demand <= 0:
+                 logger.error(f"Mafia event triggered for {user.id} but demand is invalid: {mafia_demand}")
+                 await update.message.reply_text("The usual collectors showed up, but seemed confused... they left empty-handed. Lucky break?")
+                 return
+
+            # Store necessary info for the callback handler
+            context.user_data['mafia_collect_amount'] = collected_amount
+            context.user_data['mafia_demand'] = mafia_demand
+            logger.info(f"Storing user_data for Mafia event: collect={collected_amount}, demand={mafia_demand}")
+
+            keyboard = [
+                [
+                    InlineKeyboardButton(f"🤌 Pay ${mafia_demand:,.2f}", callback_data="mafia_pay"),
+                    InlineKeyboardButton("🙅‍♂️ Tell 'em Fuggedaboutit!", callback_data="mafia_refuse"),
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                f"🚨 Uh oh, boss! The Famiglia stopped by for their 'protection' fee.\n"
+                f"They saw you collected ${collected_amount:,.2f} and demand **${mafia_demand:,.2f}**.\n\n"
+                f"Whaddya wanna do?",
+                reply_markup=reply_markup,
+            )
+
+        elif collected_amount > 0.01:
+            # --- NORMAL COLLECTION (with tip/pineapple) --- #
+            tip_message = ""
+            pineapple_message = ""
+
+            # "Just the Tip" Mechanic
+            tip_chance = 0.15
             if random.random() < tip_chance:
-                player_data = game.load_player_data(user.id) # Need to reload to add tip
+                player_data = game.load_player_data(user.id)
                 tip_amount = round(random.uniform(collected_amount * 0.05, collected_amount * 0.2) + random.uniform(5, 50), 2)
-                tip_amount = max(5.0, tip_amount) # Minimum tip
+                tip_amount = max(5.0, tip_amount)
                 player_data["cash"] = player_data.get("cash", 0) + tip_amount
-                game.save_player_data(user.id, player_data) # Save tip addition
+                game.save_player_data(user.id, player_data)
                 tip_message = f"\n🍕 Woah, some wiseguy just tipped you an extra ${tip_amount:.2f} for the 'best slice in town.' You're killin' it!"
                 logger.info(f"User {user.id} received a tip of ${tip_amount:.2f}")
 
-            # --- Pineapple Easter Egg --- #
-            pineapple_chance = 0.05 # 5% chance
+            # Pineapple Easter Egg
+            pineapple_chance = 0.05
             if random.random() < pineapple_chance:
                 pineapple_message = "\n🍍 Psst... Remember, putting pineapple on your pizza may get you sent to the gulag."
                 logger.info(f"User {user.id} triggered the pineapple easter egg.")
 
-            # --- Cheeky Feedback --- #
-            # Append both messages if they triggered
+            # Send confirmation
             await update.message.reply_html(f"🤑 Pizza payday, baby! You just grabbed ${collected_amount:.2f} fresh outta the oven!{tip_message}{pineapple_message}")
 
+            # Notifications AFTER confirmation
             await send_challenge_notifications(user.id, completed_challenges, context)
             await check_and_notify_achievements(user.id, context)
         else:
@@ -602,6 +633,89 @@ async def boost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Sorry, I didn't understand that command. Try /start or /status.")
 
+# --- Mafia Callback Handler --- #
+async def mafia_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles the response to the Mafia shakedown buttons."""
+    query = update.callback_query
+    user = query.from_user
+    await query.answer() # Answer callback query quickly
+
+    choice = query.data # "mafia_pay" or "mafia_refuse"
+
+    # Retrieve stored data
+    collected_amount = context.user_data.get('mafia_collect_amount')
+    mafia_demand = context.user_data.get('mafia_demand')
+
+    if collected_amount is None or mafia_demand is None:
+        logger.warning(f"Mafia callback triggered for user {user.id} but user_data missing.")
+        await query.edit_message_text(text="Something went wrong processing your choice. Try collecting again.")
+        return
+
+    # Clear temporary data immediately
+    context.user_data.pop('mafia_collect_amount', None)
+    context.user_data.pop('mafia_demand', None)
+
+    logger.info(f"User {user.id} chose '{choice}' for Mafia event (Collect: ${collected_amount:.2f}, Demand: ${mafia_demand:.2f})")
+
+    cash_to_add = 0.0
+    outcome_message = ""
+    challenge_metrics_to_update = []
+
+    if choice == "mafia_pay":
+        cash_to_add = max(0, collected_amount - mafia_demand)
+        outcome_message = f"💸 You paid the ${mafia_demand:,.2f}. Smart move... maybe. You keep ${cash_to_add:,.2f}."
+        challenge_metrics_to_update = ["session_income", "session_collects"]
+    elif choice == "mafia_refuse":
+        # 50/50 chance
+        if random.random() < 0.5:
+            # Win!
+            cash_to_add = collected_amount
+            outcome_message = f"💪 You told 'em to fuggedaboutit, and they backed down! You keep the whole ${cash_to_add:,.2f}!"
+            challenge_metrics_to_update = ["session_income", "session_collects"]
+            logger.info(f"User {user.id} WON the Mafia gamble.")
+        else:
+            # Lose!
+            cash_to_add = 0.0
+            outcome_message = f"🤕 Ouch! They weren't bluffing. They took the whole ${collected_amount:,.2f}. Maybe pay up next time?"
+            # Don't track session_income if they lost it all
+            challenge_metrics_to_update = ["session_collects"] # Still counts as a collection attempt for challenges
+            logger.info(f"User {user.id} LOST the Mafia gamble.")
+
+    # --- Update Player Data --- #
+    try:
+        player_data = game.load_player_data(user.id)
+        if not player_data:
+             raise ValueError("Failed to load player data after Mafia interaction.")
+
+        if cash_to_add > 0:
+            player_data["cash"] = player_data.get("cash", 0) + cash_to_add
+            player_data["total_income_earned"] = player_data.get("total_income_earned", 0) + cash_to_add
+            # Only track income stat if they actually received cash
+            if "session_income" in challenge_metrics_to_update:
+                 player_data["stats"]["session_income"] = player_data["stats"].get("session_income", 0) + cash_to_add
+
+        # Always track collection attempt stat
+        player_data["stats"]["session_collects"] = player_data["stats"].get("session_collects", 0) + 1
+
+        # Check challenges based on what actually happened
+        completed_challenges = game.update_challenge_progress(player_data, challenge_metrics_to_update)
+
+        game.save_player_data(user.id, player_data)
+
+        # --- Notify User --- #
+        await query.edit_message_text(text=outcome_message) # Update the original message
+        await send_challenge_notifications(user.id, completed_challenges, context)
+        # Check achievements based on final state
+        await check_and_notify_achievements(user.id, context)
+
+    except Exception as e:
+        logger.error(f"Error processing Mafia callback outcome for {user.id}: {e}", exc_info=True)
+        # Try to send a fallback message if editing failed
+        try:
+            await context.bot.send_message(chat_id=user.id, text="An error occurred processing your decision. Please check /status.")
+        except Exception: # Ignore errors sending the fallback
+            pass
+
 def main() -> None:
     """Start the bot and scheduler."""
     logger.info("Building Telegram Application...")
@@ -627,6 +741,9 @@ def main() -> None:
 
     logger.info("Adding unknown command handler...")
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+
+    # --- Add Mafia Callback Handler --- #
+    application.add_handler(CallbackQueryHandler(mafia_button_callback, pattern="^mafia_(pay|refuse)$"))
 
     # Schedule challenge generation jobs
     logger.info("Setting up scheduled jobs...")

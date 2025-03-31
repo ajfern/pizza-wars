@@ -56,7 +56,8 @@ def initialize_database():
         challenge_progress JSONB DEFAULT '{}'::jsonb,
         stats JSONB DEFAULT '{}'::jsonb,
         total_income_earned NUMERIC(18, 4) DEFAULT 0.0,
-        last_login_time TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        last_login_time TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        collection_count INTEGER DEFAULT 0
     );
     """
     try:
@@ -145,7 +146,8 @@ def load_player_data(user_id: int) -> dict | None:
 
     sql = """
     SELECT display_name, cash, pizza_coins, shops, unlocked_achievements, current_title,
-           active_challenges, challenge_progress, stats, total_income_earned, last_login_time
+           active_challenges, challenge_progress, stats, total_income_earned, last_login_time,
+           collection_count
     FROM players WHERE user_id = %s;
     """
     default_state = get_default_player_state(user_id)
@@ -169,7 +171,8 @@ def load_player_data(user_id: int) -> dict | None:
                 "challenge_progress": result[7] if result[7] is not None else {'daily': {}, 'weekly': {}},
                 "stats": result[8] if result[8] is not None else {},
                 "total_income_earned": float(result[9]),
-                "last_login_time": result[10].timestamp() if result[10] else time.time()
+                "last_login_time": result[10].timestamp() if result[10] else time.time(),
+                "collection_count": result[11] or 0
             }
             player_data.setdefault("active_challenges", {'daily': None, 'weekly': None})
             player_data.setdefault("challenge_progress", {'daily': {}, 'weekly': {}})
@@ -181,7 +184,8 @@ def load_player_data(user_id: int) -> dict | None:
             return player_data
         else:
             logger.info(f"No player data found for {user_id}. Inserting default state.")
-            save_player_data(user_id, default_state) # Use save function to insert
+            default_state["collection_count"] = 0 # Ensure default includes it
+            save_player_data(user_id, default_state)
             return default_state
 
     except psycopg2.DatabaseError as e:
@@ -212,6 +216,7 @@ def save_player_data(user_id: int, data: dict) -> None:
     data.setdefault("stats", {})
     data.setdefault("total_income_earned", 0.0)
     data.setdefault("last_login_time", time.time()) # Use current time if missing
+    data.setdefault("collection_count", 0) # Ensure collection_count key exists
 
     # Ensure default sub-dicts/lists for JSONB compatibility
     data["shops"] = data.get("shops") or {}
@@ -227,9 +232,10 @@ def save_player_data(user_id: int, data: dict) -> None:
     sql = """
     INSERT INTO players (
         user_id, display_name, cash, pizza_coins, shops, unlocked_achievements, current_title,
-        active_challenges, challenge_progress, stats, total_income_earned, last_login_time
+        active_challenges, challenge_progress, stats, total_income_earned, last_login_time,
+        collection_count
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s))
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s), %s)
     ON CONFLICT (user_id) DO UPDATE SET
         display_name = EXCLUDED.display_name,
         cash = EXCLUDED.cash,
@@ -241,7 +247,8 @@ def save_player_data(user_id: int, data: dict) -> None:
         challenge_progress = EXCLUDED.challenge_progress,
         stats = EXCLUDED.stats,
         total_income_earned = EXCLUDED.total_income_earned,
-        last_login_time = EXCLUDED.last_login_time;
+        last_login_time = EXCLUDED.last_login_time,
+        collection_count = EXCLUDED.collection_count;
     """
     try:
         # Convert complex types to JSON strings for psycopg2 if needed,
@@ -265,7 +272,8 @@ def save_player_data(user_id: int, data: dict) -> None:
                 challenge_progress_json,
                 stats_json,
                 data["total_income_earned"],
-                data["last_login_time"] # Pass timestamp float
+                data["last_login_time"],
+                data["collection_count"]
             ))
         conn.commit()
         logger.debug(f"Successfully saved data for user {user_id}.")
@@ -306,6 +314,7 @@ def get_default_player_state(user_id: int) -> dict:
         },
         "total_income_earned": 0.0,
         "last_login_time": time.time(),
+        "collection_count": 0
     }
 
 # --- Income Calculation (Modified for stats) ---
@@ -338,29 +347,53 @@ def calculate_uncollected_income(player_data: dict) -> float:
         total_uncollected += shop_rate * time_diff
     return total_uncollected
 
-def collect_income(user_id: int) -> tuple[float, list[str]]:
-    """Collects income, updates player data, tracks stats, and returns (amount, completed_challenge_messages)."""
+def collect_income(user_id: int) -> tuple[float, list[str], bool, float | None]:
+    """Collects income, increments count, checks for Mafia.
+       Returns (collected_amount, completed_challenges, is_mafia_event, mafia_demand_or_None)."""
     player_data = load_player_data(user_id)
+    if not player_data:
+        logger.error(f"Failed to load player data for collect_income, user {user_id}")
+        return 0.0, [], False, None
+
     uncollected = calculate_uncollected_income(player_data)
     completed_challenges = []
+    is_mafia_event = False
+    mafia_demand = None
 
     if uncollected > 0.01:
-        player_data["cash"] = player_data.get("cash", 0) + uncollected
-        player_data["total_income_earned"] = player_data.get("total_income_earned", 0) + uncollected
-        player_data["stats"]["session_income"] = player_data["stats"].get("session_income", 0) + uncollected
-        player_data["stats"]["session_collects"] = player_data["stats"].get("session_collects", 0) + 1
+        # Increment collection count ALWAYS before deciding outcome
+        player_data["collection_count"] = player_data.get("collection_count", 0) + 1
+        collection_count = player_data["collection_count"]
+        logger.info(f"User {user_id} collection attempt #{collection_count}. Amount: ${uncollected:.2f}")
 
-        current_time = time.time()
-        for shop_name in player_data["shops"]:
-             player_data["shops"][shop_name]["last_collected_time"] = current_time
+        # --- Check for Mafia Event --- #
+        if collection_count > 0 and collection_count % 5 == 0:
+            is_mafia_event = True
+            # Calculate demand (e.g., 10-75% of uncollected)
+            demand_percentage = random.uniform(0.10, 0.75)
+            mafia_demand = round(uncollected * demand_percentage, 2)
+            logger.info(f"Mafia event triggered for user {user_id}! Demand: ${mafia_demand:.2f} ({demand_percentage*100:.1f}%)")
+            # DO NOT add cash yet. DO NOT check challenges/tips yet.
+            # Save only the incremented collection count.
+            save_player_data(user_id, player_data)
+            return uncollected, [], is_mafia_event, mafia_demand
+        else:
+            # --- Normal Collection --- #
+            player_data["cash"] = player_data.get("cash", 0) + uncollected
+            player_data["total_income_earned"] = player_data.get("total_income_earned", 0) + uncollected
+            player_data["stats"]["session_income"] = player_data["stats"].get("session_income", 0) + uncollected
+            player_data["stats"]["session_collects"] = player_data["stats"].get("session_collects", 0) + 1
 
-        # Check challenges after updating stats
-        completed_challenges = update_challenge_progress(player_data, ["session_income", "session_collects"])
+            current_time = time.time()
+            for shop_name in player_data["shops"]:
+                player_data["shops"][shop_name]["last_collected_time"] = current_time
 
-        save_player_data(user_id, player_data)
-        return uncollected, completed_challenges
+            completed_challenges = update_challenge_progress(player_data, ["session_income", "session_collects"])
+            save_player_data(user_id, player_data)
+            return uncollected, completed_challenges, is_mafia_event, mafia_demand
     else:
-        return 0.0, []
+        # Nothing to collect, still return structure
+        return 0.0, [], False, None
 
 # --- Upgrade & Expansion Logic (Modified for failure chance) ---
 
