@@ -440,10 +440,13 @@ async def expand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # --- Helper for processing expansion --- #
 async def _process_expansion(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, target_expansion_name: str):
     """Internal function to handle the actual expansion logic and feedback."""
+    logger.info(f"Entered _process_expansion for user {user_id}, target {target_expansion_name}") # Added log
     try:
         success, message, completed_challenges = game.expand_shop(user_id, target_expansion_name)
-        # Check if the update object has callback_query attribute
-        is_callback = hasattr(update, 'callback_query') and update.callback_query is not None
+        # Correctly check if the update object itself is the CallbackQuery
+        from telegram import CallbackQuery # Local import for type check
+        is_callback = isinstance(update, CallbackQuery)
+        logger.debug(f"_process_expansion: is_callback = {is_callback}") # Added log
 
         if success:
             fun_messages = [
@@ -452,10 +455,11 @@ async def _process_expansion(update: Update, context: ContextTypes.DEFAULT_TYPE,
                  f"🍕 Plantin' the flag in {target_expansion_name}! More ovens, more money!"
             ]
             response_message = random.choice(fun_messages)
-            # If called from callback, edit message, otherwise send new
             if is_callback:
-                 await update.callback_query.edit_message_text(text=response_message, parse_mode="HTML")
+                 logger.debug("Attempting to edit message for callback (success).")
+                 await update.edit_message_text(text=response_message, parse_mode="HTML") # Use update directly
             else:
+                 logger.debug("Attempting to send new message for command (success).")
                  await context.bot.send_message(chat_id=user_id, text=response_message, parse_mode="HTML")
 
             await send_challenge_notifications(user_id, completed_challenges, context)
@@ -463,16 +467,27 @@ async def _process_expansion(update: Update, context: ContextTypes.DEFAULT_TYPE,
         else:
             # Send the error message from game.expand_shop
             if is_callback:
-                 await update.callback_query.edit_message_text(text=message) # Edit message for callback
+                 logger.debug("Attempting to edit message for callback (failure).")
+                 await update.edit_message_text(text=message) # Use update directly
             else:
-                 await context.bot.send_message(chat_id=user_id, text=message) # Send new message for command
+                 logger.debug("Attempting to send new message for command (failure).")
+                 await context.bot.send_message(chat_id=user_id, text=message)
 
     except Exception as e:
         logger.error(f"Error during _process_expansion for {user_id}, location {target_expansion_name}: {e}", exc_info=True)
         error_message = "Whoa there! Somethin' went sideways tryin' to expand."
-        is_callback = hasattr(update, 'callback_query') and update.callback_query is not None
+        # Correctly check if the original trigger was a callback
+        from telegram import CallbackQuery # Local import for type check
+        is_callback = isinstance(update, CallbackQuery)
+        logger.debug(f"_process_expansion exception: is_callback = {is_callback}")
         if is_callback:
-             await update.callback_query.edit_message_text(text=error_message)
+             # Use update.message.chat_id for sending fallback if edit fails
+             chat_id_to_reply = update.message.chat_id if update.message else user_id
+             try:
+                  await update.edit_message_text(text=error_message)
+             except Exception as edit_err:
+                  logger.error(f"Failed to edit message on expansion error: {edit_err}")
+                  await context.bot.send_message(chat_id=chat_id_to_reply, text=error_message)
         else:
              await context.bot.send_message(chat_id=user_id, text=error_message)
 
@@ -481,18 +496,19 @@ async def expansion_choice_callback(update: Update, context: ContextTypes.DEFAUL
     """Handles button presses for selecting an expansion location."""
     query = update.callback_query
     user = query.from_user
-    await query.answer()
+    logger.info(f"Received expansion callback query from user {user.id}. Data: {query.data}") # Added log
+    await query.answer() # Answer callback query quickly
 
     # Extract location from callback data (e.g., "expand_London")
     try:
         target_location = query.data.split("expand_", 1)[1]
     except IndexError:
         logger.warning(f"Invalid expansion callback data received: {query.data}")
-        await query.edit_message_text("Invalid choice.")
+        await query.edit_message_text("Invalid choice.") # Edit the message text
         return
 
     logger.info(f"User {user.id} chose to expand to {target_location} via button.")
-    # Pass the query object (which is a type of Update) to the helper
+    # Pass the query object to the helper
     await _process_expansion(query, context, user.id, target_location)
 
 async def challenges_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
