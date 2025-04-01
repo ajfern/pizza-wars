@@ -199,12 +199,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_html(reply_message)
         logger.info(f"Welcome message sent successfully to {user.id}.")
 
-        # FTUE: Show status immediately
+        # --- Show Status & Prompt for Name --- #
         logger.info(f"Sending initial status to player {user.id}")
         status_message = game.format_status(player_data)
-        await update.message.reply_html(status_message)
+        await update.message.reply_html(status_message) # Show initial status
 
-        # Check initial achievements (safe even if not new, won't re-award)
+        # Prompt for name if not set
+        if not player_data.get("franchise_name"):
+            await update.message.reply_text(
+                """Looks like your empire doesn't have a name yet! Give it some pizzazz with:
+/setname [Your Awesome Franchise Name]"""
+            )
+        # --- End Prompt --- #
+
         await check_and_notify_achievements(user.id, context)
 
     except Exception as e:
@@ -773,6 +780,53 @@ async def mafia_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception: # Ignore errors sending the fallback
             pass
 
+# --- Set Franchise Name Command --- #
+async def setname_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Allows the player to set their franchise name."""
+    user = update.effective_user
+    if not user:
+        await update.message.reply_text("Cannot set name without user info.")
+        return
+    await update_player_display_name(user.id, user)
+
+    if not context.args:
+        await update.message.reply_text("Usage: /setname [Your Franchise Name]")
+        return
+
+    new_name = " ".join(context.args).strip()
+    max_len = 50
+    if not new_name:
+        await update.message.reply_text("You gotta give your empire a name!")
+        return
+    if len(new_name) > max_len:
+        await update.message.reply_text(f"Whoa, that's a long name! Keep it under {max_len} characters, boss.")
+        return
+
+    # Basic sanitization: Remove potential HTML tags just in case
+    # A more robust solution might involve allowing specific safe tags or using a library
+    import re
+    sanitized_name = re.sub('<[^<]+?>', '', new_name) # Strip HTML tags
+    if not sanitized_name:
+         await update.message.reply_text("C'mon, give it a real name!")
+         return
+
+    logger.info(f"User {user.id} attempting to set franchise name to: {sanitized_name}")
+    try:
+        player_data = game.load_player_data(user.id)
+        if not player_data:
+             await update.message.reply_text("Could not load your data to set the name.")
+             return
+
+        player_data["franchise_name"] = sanitized_name
+        game.save_player_data(user.id, player_data)
+        # Use html.escape for displaying user-provided name safely in HTML context
+        import html
+        await update.message.reply_html(f"Alright, your pizza empire shall henceforth be known as: <b>{html.escape(sanitized_name)}</b>! Good luck!")
+
+    except Exception as e:
+        logger.error(f"Error setting franchise name for {user.id}: {e}", exc_info=True)
+        await update.message.reply_text("Couldn't save the new name right now. Try again.")
+
 def main() -> None:
     """Start the bot and scheduler."""
     logger.info("Building Telegram Application...")
@@ -790,6 +844,7 @@ def main() -> None:
     application.add_handler(CommandHandler("buycoins", buy_coins_command))
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("setname", setname_command))
     # application.add_handler(CommandHandler("boost", boost_command)) # Placeholder boost command
 
     logger.info("Adding payment handlers...")
