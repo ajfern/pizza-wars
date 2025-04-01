@@ -589,6 +589,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "🍕 <b>Pizza Empire Command Guide</b> 🍕\n\n"
         "<b>Core Gameplay:</b>\n"
         "/start - Initialize your pizza empire (or view this message again).\n"
+        "/setname [name] - Set your franchise name (e.g., `/setname Luigi's Finest`).\n"
         "/status - Check your cash, shops, title, and achievements.\n"
         "/collect - Scoop up the cash your shops have earned!\n"
         "/upgrade [shop] - List upgrade options or upgrade a specific shop (e.g., `/upgrade Brooklyn`).\n"
