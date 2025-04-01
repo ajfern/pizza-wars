@@ -450,11 +450,11 @@ def upgrade_shop(user_id: int, shop_name: str) -> tuple[bool, str, list[str]]:
     cash = player_data.get("cash", 0)
 
     if cash < cost:
-        return False, f"Not enough cash! Need ${cost:.2f} to upgrade {shop_name} to level {current_level + 1}. You have ${cash:.2f}.", []
+        return False, f"Not enough cash! Need ${cost:,.2f} to upgrade {shop_name} to level {current_level + 1}. You have ${cash:,.2f}.", []
 
     # --- Upgrade Attempt: Deduct cost first --- #
     player_data["cash"] = cash - cost
-    logger.info(f"User {user_id} attempting upgrade on {shop_name} Lvl {current_level}. Cost: ${cost:.2f}. New cash (temp): ${player_data['cash']:.2f}")
+    logger.info(f"User {user_id} attempting upgrade on {shop_name} Lvl {current_level}. Cost: ${cost:,.2f}. New cash (temp): ${player_data['cash']:.2f}")
 
     # --- Check for Failure --- #
     if random.random() < UPGRADE_FAILURE_CHANCE:
