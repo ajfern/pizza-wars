@@ -280,8 +280,8 @@ async def collect_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 pineapple_message = "\n🍍 Psst... Remember, putting pineapple on your pizza may get you sent to the gulag."
                 logger.info(f"User {user.id} triggered the pineapple easter egg.")
 
-            # Send confirmation
-            await update.message.reply_html(f"🤑 Pizza payday, baby! You just grabbed ${collected_amount:.2f} fresh outta the oven!{tip_message}{pineapple_message}")
+            # Send confirmation with comma formatting
+            await update.message.reply_html(f"🤑 Pizza payday, baby! You just grabbed ${collected_amount:,.2f} fresh outta the oven!{tip_message}{pineapple_message}")
 
             # Notifications AFTER confirmation
             await send_challenge_notifications(user.id, completed_challenges, context)
