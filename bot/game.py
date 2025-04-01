@@ -77,13 +77,28 @@ BASE_UPGRADE_COST = 75
 UPGRADE_COST_MULTIPLIER = 1.75
 UPGRADE_FAILURE_CHANCE = 0.15 # 15% chance for an upgrade to fail
 
+# Expansion: Location: (Req Type, Req Val, GDP Factor, Cost Scale Factor)
+# Req Types: 'level' (initial shop level), 'total_income', 'shops_count', 'has_shop' (requires specific shop)
+# GDP Factor: Multiplies base income per level.
+# Cost Scale Factor: Multiplies base upgrade cost.
 EXPANSION_LOCATIONS = {
-    "Manhattan":    ("level", 5, 1.5, 1.5),  # 1.5x cost
-    "Queens":       ("level", 10, 2.0, 2.0),  # 2.0x cost
-    "Philadelphia": ("level", 15, 3.0, 3.0),  # 3.0x cost
-    "Albany":       ("total_income", 25000, 4.0, 2.5),  # 2.5x cost
-    "Chicago":      ("shops_count", 5, 6.0, 4.0),  # 4.0x cost
-    "Tokyo":        ("total_income", 1000000, 10.0, 7.5) # 7.5x cost
+    # USA - NYC Boroughs
+    "Manhattan":    ("level", 5, 1.5, 1.5),      # Req: Brooklyn Lvl 5
+    "Queens":       ("level", 10, 1.2, 1.2),     # Req: Brooklyn Lvl 10 (Lower GDP/Cost than Manhattan)
+    # USA - Regional
+    "Philadelphia": ("level", 15, 1.8, 1.8),     # Req: Brooklyn Lvl 15
+    "Albany":       ("total_income", 25000, 1.4, 1.5),     # Req: Total Earned $25k
+    "Chicago":      ("shops_count", 5, 2.5, 2.5),     # Req: Own 5 Shops Total
+    # Europe
+    "London":       ("total_income", 100000, 3.5, 4.0),     # Req: Total Earned $100k
+    "Paris":        ("has_shop", "London", 3.2, 3.8),     # Req: Own London shop
+    # Asia
+    "Tokyo":        ("total_income", 500000, 5.0, 6.0),     # Req: Total Earned $500k
+    "Beijing":      ("has_shop", "Tokyo", 4.5, 5.5),     # Req: Own Tokyo shop
+    # Americas (Other)
+    "Mexico City":  ("shops_count", 7, 2.0, 2.0),     # Req: Own 7 Shops Total
+    # Oceania
+    "Sydney":       ("total_income", 250000, 2.8, 3.5),     # Req: Total Earned $250k
 }
 
 # --- Achievement Definitions ---
@@ -102,8 +117,10 @@ ACHIEVEMENTS = {
     "brooklyn_10": ("Brooklyn Boss", "Upgrade Brooklyn to Level 10", ('shop_level', INITIAL_SHOP_NAME), 10, 'cash', 2000, "Brooklyn Boss"),
     "manhattan_5": ("Manhattan Maven", "Upgrade Manhattan to Level 5", ('shop_level', "Manhattan"), 5, 'pizza_coins', 25, "Manhattan Maven"),
     # Expansion Milestones
-    "first_expansion": ("Branching Out", "Open your second shop", ('shops_count',), 2, 'cash', 250, None), # No title for this one
+    "first_expansion": ("Branching Out", "Open your second shop", ('shops_count',), 2, 'cash', 250, None),
     "statewide": ("Empire State of Mind", "Expand to Albany", ('has_shop', "Albany"), 1, 'pizza_coins', 75, None),
+    "london_calling": ("London Calling", "Expand to London", ('has_shop', "London"), 1, 'pizza_coins', 150, "Globetrotter"),
+    "asia_expansion": ("Taste of the East", "Expand to Tokyo", ('has_shop', "Tokyo"), 1, 'pizza_coins', 200, None),
     # Add more achievements: rivals defeated (requires rival logic), specific shop levels, etc.
 }
 
@@ -335,21 +352,27 @@ def get_default_player_state(user_id: int) -> dict:
         "collection_count": 0
     }
 
-# --- Income Calculation (Modified for stats) ---
-
+# --- Income Calculation (Uses GDP Factor) ---
 def calculate_income_rate(shops: dict) -> float:
     total_rate = 0.0
     for name, shop_data in shops.items():
         level = shop_data.get("level", 1)
-        base_multiplier = EXPANSION_LOCATIONS.get(name, (None, None, 1.0))[2] if name != INITIAL_SHOP_NAME else 1.0
-        shop_rate = (BASE_INCOME_PER_SECOND * level) * base_multiplier
+        # Use get_shop_income_rate which now includes GDP factor
+        shop_rate = get_shop_income_rate(name, level)
         total_rate += shop_rate
     return total_rate
 
 def get_shop_income_rate(shop_name: str, level: int) -> float:
-    """Calculates the income rate for a single shop at a specific level."""
-    base_multiplier = EXPANSION_LOCATIONS.get(shop_name, (None, None, 1.0))[2] if shop_name != INITIAL_SHOP_NAME else 1.0
-    shop_rate = (BASE_INCOME_PER_SECOND * level) * base_multiplier
+    """Calculates the income rate for a single shop, including GDP factor."""
+    gdp_factor = 1.0 # Default for initial shop
+    if shop_name != INITIAL_SHOP_NAME and shop_name in EXPANSION_LOCATIONS:
+        # GDP Factor is the 3rd element (index 2)
+        if len(EXPANSION_LOCATIONS[shop_name]) > 2:
+             gdp_factor = EXPANSION_LOCATIONS[shop_name][2]
+        else:
+             logger.warning(f"Missing GDP factor for expansion {shop_name}, using 1.0")
+
+    shop_rate = (BASE_INCOME_PER_SECOND * level) * gdp_factor
     return shop_rate
 
 def calculate_uncollected_income(player_data: dict) -> float:
@@ -360,8 +383,8 @@ def calculate_uncollected_income(player_data: dict) -> float:
         level = shop_data.get("level", 1)
         last_collected = shop_data.get("last_collected_time", current_time)
         time_diff = max(0, current_time - last_collected)
-        base_multiplier = EXPANSION_LOCATIONS.get(name, (None, None, 1.0))[2] if name != INITIAL_SHOP_NAME else 1.0
-        shop_rate = (BASE_INCOME_PER_SECOND * level) * base_multiplier
+        # Use helper function for rate
+        shop_rate = get_shop_income_rate(name, level)
         total_uncollected += shop_rate * time_diff
     return total_uncollected
 
@@ -485,7 +508,7 @@ def get_available_expansions(player_data: dict) -> list[str]:
     initial_shop_level = owned_shops.get(INITIAL_SHOP_NAME, {}).get("level", 1)
     total_income = player_data.get("total_income_earned", 0)
 
-    for name, (req_type, req_value, _income_mult, _cost_scale) in EXPANSION_LOCATIONS.items():
+    for name, (req_type, req_value, _gdp_factor, _cost_scale) in EXPANSION_LOCATIONS.items():
         if name in owned_shops:
             continue
         met_requirement = False
@@ -495,6 +518,14 @@ def get_available_expansions(player_data: dict) -> list[str]:
         elif req_type == "total_income":
             if total_income >= req_value:
                 met_requirement = True
+        elif req_type == "shops_count":
+            if len(owned_shops) >= req_value:
+                 met_requirement = True
+        elif req_type == "has_shop": # Check for prerequisite shop
+             prereq_shop = req_value
+             if prereq_shop in owned_shops:
+                  met_requirement = True
+
         if met_requirement:
             available.append(name)
     return available
@@ -512,7 +543,7 @@ def expand_shop(user_id: int, expansion_name: str) -> tuple[bool, str, list[str]
         return False, f"You already have a shop in {expansion_name}!", []
 
     if expansion_name not in available_expansions:
-        req_type, req_value, _income_mult, _cost_scale = EXPANSION_LOCATIONS[expansion_name]
+        req_type, req_value, _gdp, _cost = EXPANSION_LOCATIONS[expansion_name] # Expecting 4
         if req_type == "level":
             return False, f"You can't expand to {expansion_name} yet. Requires {INITIAL_SHOP_NAME} to be Level {req_value}.", []
         elif req_type == "total_income":
@@ -520,6 +551,9 @@ def expand_shop(user_id: int, expansion_name: str) -> tuple[bool, str, list[str]
         elif req_type == "shops_count":
              owned_count = len(player_data.get("shops", {}))
              return False, f"You can't expand to {expansion_name} yet. Requires {req_value} total shops (you have {owned_count}).", []
+        elif req_type == "has_shop":
+             prereq_shop = req_value
+             return False, f"You can't expand to {expansion_name} yet. Requires owning a shop in {prereq_shop}.", []
         else:
              return False, f"You don't meet the requirements to expand to {expansion_name} yet.", []
 
@@ -718,9 +752,17 @@ def format_status(player_data: dict) -> str:
     status_lines.append("<b>Available Expansions:</b>")
     if available_expansions:
         for loc in available_expansions:
-             req_type, req_value, _income_mult, _cost_scale = EXPANSION_LOCATIONS[loc]
-             req_str = f"(Req: {INITIAL_SHOP_NAME} Lvl {req_value})" if req_type == "level" else f"(Req: Total Earned ${req_value:,.2f})" if req_type == "total_income" else f"(Req: {req_value} Shops)"
-             status_lines.append(f"  - {loc} {req_str} - Use /expand {loc.lower()}")
+             # Unpack all 4 values here too
+             req_type, req_value, gdp_factor, _cost_scale = EXPANSION_LOCATIONS[loc] # Expecting 4
+             # Display requirement
+             if req_type == "level": req_str = f"(Req: {INITIAL_SHOP_NAME} Lvl {req_value})"
+             elif req_type == "total_income": req_str = f"(Req: Total Earned ${req_value:,.2f})"
+             elif req_type == "shops_count": req_str = f"(Req: {req_value} Shops)"
+             elif req_type == "has_shop": req_str = f"(Req: Own {req_value})"
+             else: req_str = "(Unknown Req)"
+             # Display potential
+             potential_str = f"📈x{gdp_factor:.1f}" # Show GDP Factor
+             status_lines.append(f"  - {loc} {potential_str} {req_str} - Use /expand {loc.lower()}")
     else:
         status_lines.append("  None available right now. Keep upgrading!")
 

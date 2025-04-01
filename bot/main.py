@@ -313,10 +313,12 @@ async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             current_level = shop_data.get("level", 1)
             next_level = current_level + 1
             upgrade_cost = game.get_upgrade_cost(current_level, shop_name)
+            # Use get_shop_income_rate which now includes GDP factor
             current_rate_hr = game.get_shop_income_rate(shop_name, current_level) * 3600
             next_rate_hr = game.get_shop_income_rate(shop_name, next_level) * 3600
-            lines.append(f"- <b>{shop_name}</b> (Level {current_level} → {next_level}): Costs ya ${upgrade_cost:,.2f}, bumps your earnings from ${current_rate_hr:,.2f}/hr to ${next_rate_hr:,.2f}/hr.")
-            lines.append(f"  Type /upgrade {shop_name.lower()} to toss your dough at it!")
+            # Adjusted message to reflect potential cost differences
+            lines.append(f"- <b>{shop_name}</b> (Level {current_level} → {next_level}): Costs ${upgrade_cost:,.2f}, improves income! (${current_rate_hr:,.2f}/hr → ${next_rate_hr:,.2f}/hr)")
+            lines.append(f"  Type /upgrade {shop_name.lower()} to make it happen!")
 
         await update.message.reply_html("\n".join(lines))
         return
@@ -382,57 +384,109 @@ async def expand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not user:
          await update.message.reply_text("Who dis? Can't expand if I dunno who you are.")
          return
-    await update_player_display_name(user.id, user) # <-- Update name on expand
-    if not context.args:
-        # Maybe list available expansions here too?
-        player_data = game.load_player_data(user.id)
-        available = game.get_available_expansions(player_data)
-        if not available:
-            await update.message.reply_text("No new turf available right now, boss. Keep growin'!")
-        else:
-            lines = ["Ready to expand the empire? Here's where you can plant your flag next:"]
-            for loc in available:
-                lines.append(f"- {loc} (Use /expand {loc.lower()})")
-            await update.message.reply_text("\n".join(lines))
+    await update_player_display_name(user.id, user)
+
+    # If arguments provided, handle direct expansion attempt (existing logic)
+    if context.args:
+        expansion_name_arg = " ".join(context.args).strip()
+        target_expansion_name = None
+        for name in game.EXPANSION_LOCATIONS.keys():
+            if name.lower() == expansion_name_arg.lower():
+                target_expansion_name = name
+                break
+        if not target_expansion_name:
+            await update.message.reply_text(f"'{expansion_name_arg}'? Never heard of it. Check available spots via /expand (no args) or /status.")
+            return
+        logger.info(f"User {user.id} attempting direct expand to '{target_expansion_name}'.")
+        await _process_expansion(update, context, user.id, target_expansion_name)
         return
 
-    expansion_name_arg = " ".join(context.args).strip()
-    # Check if it's a valid *possible* expansion (case-insensitive)
-    target_expansion_name = None
-    for name in game.EXPANSION_LOCATIONS.keys():
-         if name.lower() == expansion_name_arg.lower():
-              target_expansion_name = name
-              break
+    # --- No arguments: Show available expansions with buttons --- #
+    logger.info(f"User {user.id} requested expansion list.")
+    player_data = game.load_player_data(user.id)
+    if not player_data:
+        await update.message.reply_text("Could not load your data.")
+        return
 
-    if not target_expansion_name:
-         await update.message.reply_text(f"'{expansion_name_arg}'? Never heard of it. Where's dat? Try checkin' ya /status for available spots.")
-         return
+    available = game.get_available_expansions(player_data)
 
-    logger.info(f"User {user.id} attempting to expand to '{target_expansion_name}'.")
+    if not available:
+        await update.message.reply_text("No new turf available right now, boss. Keep growin' the current spots!")
+        return
 
+    keyboard = []
+    row = []
+    for i, loc in enumerate(available):
+        gdp_factor = game.EXPANSION_LOCATIONS[loc][2]
+        button_text = f"{loc} (📈x{gdp_factor:.1f})"
+        # Create rows of 2 buttons
+        row.append(InlineKeyboardButton(button_text, callback_data=f"expand_{loc}"))
+        if (i + 1) % 2 == 0:
+            keyboard.append(row)
+            row = []
+    if row: # Add any remaining buttons
+        keyboard.append(row)
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Ready to expand the empire? Choose your next conquest:", reply_markup=reply_markup)
+
+# --- Helper for processing expansion --- #
+async def _process_expansion(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, target_expansion_name: str):
+    """Internal function to handle the actual expansion logic and feedback."""
     try:
-        # Expand shop now returns completed challenges
-        success, message, completed_challenges = game.expand_shop(user.id, target_expansion_name)
+        success, message, completed_challenges = game.expand_shop(user_id, target_expansion_name)
+        # Check if the update object has callback_query attribute
+        is_callback = hasattr(update, 'callback_query') and update.callback_query is not None
 
-        # --- Cheeky Feedback --- #
         if success:
             fun_messages = [
                  f"🗽 Fuggedaboutit! Your pizza empire just hit {target_expansion_name}!",
                  f"🗺️ You've outgrown the neighborhood? Time to take this pizza circus to {target_expansion_name}!",
                  f"🍕 Plantin' the flag in {target_expansion_name}! More ovens, more money!"
             ]
-            await update.message.reply_html(random.choice(fun_messages))
-            # Notify about completed expansion challenges
-            await send_challenge_notifications(user.id, completed_challenges, context)
-            # Check achievements AFTER replying about expansion
-            await check_and_notify_achievements(user.id, context)
+            response_message = random.choice(fun_messages)
+            # If called from callback, edit message, otherwise send new
+            if is_callback:
+                 await update.callback_query.edit_message_text(text=response_message, parse_mode="HTML")
+            else:
+                 await context.bot.send_message(chat_id=user_id, text=response_message, parse_mode="HTML")
+
+            await send_challenge_notifications(user_id, completed_challenges, context)
+            await check_and_notify_achievements(user_id, context)
         else:
             # Send the error message from game.expand_shop
-            await update.message.reply_html(message)
+            if is_callback:
+                 await update.callback_query.edit_message_text(text=message) # Edit message for callback
+            else:
+                 await context.bot.send_message(chat_id=user_id, text=message) # Send new message for command
 
     except Exception as e:
-        logger.error(f"Error during expand_command for {user.id}, location {target_expansion_name}: {e}", exc_info=True)
-        await update.message.reply_text("Whoa there! Somethin' went sideways tryin' to expand.")
+        logger.error(f"Error during _process_expansion for {user_id}, location {target_expansion_name}: {e}", exc_info=True)
+        error_message = "Whoa there! Somethin' went sideways tryin' to expand."
+        is_callback = hasattr(update, 'callback_query') and update.callback_query is not None
+        if is_callback:
+             await update.callback_query.edit_message_text(text=error_message)
+        else:
+             await context.bot.send_message(chat_id=user_id, text=error_message)
+
+# --- New Callback Handler for Expansion Buttons --- #
+async def expansion_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles button presses for selecting an expansion location."""
+    query = update.callback_query
+    user = query.from_user
+    await query.answer()
+
+    # Extract location from callback data (e.g., "expand_London")
+    try:
+        target_location = query.data.split("expand_", 1)[1]
+    except IndexError:
+        logger.warning(f"Invalid expansion callback data received: {query.data}")
+        await query.edit_message_text("Invalid choice.")
+        return
+
+    logger.info(f"User {user.id} chose to expand to {target_location} via button.")
+    # Pass the query object (which is a type of Update) to the helper
+    await _process_expansion(query, context, user.id, target_location)
 
 async def challenges_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
