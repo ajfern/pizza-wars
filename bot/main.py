@@ -606,6 +606,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "<b>Core Gameplay:</b>\n"
         "/start - Initialize your pizza empire (or view this message again).\n"
         "/setname [name] - Set your franchise name (e.g., `/setname Luigi's Finest`).\n"
+        "/renameshop [loc] [name] - Rename a specific shop (e.g., `/renameshop Brooklyn Luigi's`).\n"
         "/status - Check your cash, shops, title, and achievements.\n"
         "/collect - Scoop up the cash your shops have earned!\n"
         "/upgrade [shop] - List upgrade options or upgrade a specific shop (e.g., `/upgrade Brooklyn`).\n"
@@ -844,6 +845,70 @@ async def setname_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.error(f"Error setting franchise name for {user.id}: {e}", exc_info=True)
         await update.message.reply_text("Couldn't save the new name right now. Try again.")
 
+# --- Rename Shop Command --- #
+async def renameshop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Allows the player to rename a specific shop location."""
+    user = update.effective_user
+    if not user:
+        await update.message.reply_text("Cannot rename shop without user info.")
+        return
+    await update_player_display_name(user.id, user)
+
+    # Expecting: /renameshop [location] [new name]
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text("Usage: /renameshop [Location] [New Custom Name]")
+        return
+
+    location_arg = context.args[0].strip()
+    new_custom_name = " ".join(context.args[1:]).strip()
+    max_len = 30 # Shorter max len for shop names
+
+    if not new_custom_name:
+        await update.message.reply_text("You gotta give the shop a new name!")
+        return
+    if len(new_custom_name) > max_len:
+        await update.message.reply_text(f"Keep the shop name under {max_len} characters, boss.")
+        return
+
+    # Basic sanitization
+    import re
+    sanitized_new_name = re.sub('<[^<]+?>', '', new_custom_name)
+    if not sanitized_new_name:
+         await update.message.reply_text("C'mon, give it a real name (no funny HTML stuff)!")
+         return
+
+    logger.info(f"User {user.id} attempting to rename shop at '{location_arg}' to: {sanitized_new_name}")
+
+    try:
+        player_data = game.load_player_data(user.id)
+        if not player_data:
+             await update.message.reply_text("Could not load your data to rename the shop.")
+             return
+
+        shops = player_data.get("shops", {})
+        target_location_key = None
+        # Find the location key case-insensitively
+        for loc_key in shops.keys():
+            if loc_key.lower() == location_arg.lower():
+                target_location_key = loc_key
+                break
+
+        if not target_location_key:
+            await update.message.reply_text(f"You don't own a shop at '{location_arg}'. Check /status.")
+            return
+
+        # Update the custom name
+        shops[target_location_key]["custom_name"] = sanitized_new_name
+        player_data["shops"] = shops # Ensure the shops dict is updated in player_data
+        game.save_player_data(user.id, player_data)
+
+        import html
+        await update.message.reply_html(f"Alright, your shop at {target_location_key} is now proudly called: <b>{html.escape(sanitized_new_name)}</b>!")
+
+    except Exception as e:
+        logger.error(f"Error renaming shop for {user.id}: {e}", exc_info=True)
+        await update.message.reply_text("Couldn't save the new shop name right now. Try again.")
+
 def main() -> None:
     """Start the bot and scheduler."""
     logger.info("Building Telegram Application...")
@@ -862,6 +927,7 @@ def main() -> None:
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("setname", setname_command))
+    application.add_handler(CommandHandler("renameshop", renameshop_command))
     # application.add_handler(CommandHandler("boost", boost_command)) # Placeholder boost command
 
     logger.info("Adding payment handlers...")

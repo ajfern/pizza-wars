@@ -47,6 +47,7 @@ def initialize_database():
     CREATE TABLE IF NOT EXISTS players (
         user_id BIGINT PRIMARY KEY,
         display_name TEXT,
+        franchise_name TEXT,
         cash NUMERIC(18, 4) DEFAULT 0.0,
         pizza_coins INTEGER DEFAULT 0,
         shops JSONB DEFAULT '{}'::jsonb,
@@ -162,7 +163,7 @@ def load_player_data(user_id: int) -> dict | None:
     if not conn: return get_default_player_state(user_id) # Return default if DB fails initially
 
     sql = """
-    SELECT display_name, cash, pizza_coins, shops, unlocked_achievements, current_title,
+    SELECT display_name, franchise_name, cash, pizza_coins, shops, unlocked_achievements, current_title,
            active_challenges, challenge_progress, stats, total_income_earned, last_login_time,
            collection_count
     FROM players WHERE user_id = %s;
@@ -179,17 +180,18 @@ def load_player_data(user_id: int) -> dict | None:
             player_data = {
                 "user_id": user_id,
                 "display_name": result[0],
-                "cash": float(result[1]),
-                "pizza_coins": result[2],
-                "shops": result[3] if result[3] is not None else {},
-                "unlocked_achievements": result[4] if result[4] is not None else [],
-                "current_title": result[5],
-                "active_challenges": result[6] if result[6] is not None else {'daily': None, 'weekly': None},
-                "challenge_progress": result[7] if result[7] is not None else {'daily': {}, 'weekly': {}},
-                "stats": result[8] if result[8] is not None else {},
-                "total_income_earned": float(result[9]),
-                "last_login_time": result[10].timestamp() if result[10] else time.time(),
-                "collection_count": result[11] or 0
+                "franchise_name": result[1],
+                "cash": float(result[2]),
+                "pizza_coins": result[3],
+                "shops": result[4] if result[4] is not None else {},
+                "unlocked_achievements": result[5] if result[5] is not None else [],
+                "current_title": result[6],
+                "active_challenges": result[7] if result[7] is not None else {'daily': None, 'weekly': None},
+                "challenge_progress": result[8] if result[8] is not None else {'daily': {}, 'weekly': {}},
+                "stats": result[9] if result[9] is not None else {},
+                "total_income_earned": float(result[10]),
+                "last_login_time": result[11].timestamp() if result[11] else time.time(),
+                "collection_count": result[12] or 0
             }
             player_data.setdefault("active_challenges", {'daily': None, 'weekly': None})
             player_data.setdefault("challenge_progress", {'daily': {}, 'weekly': {}})
@@ -198,6 +200,14 @@ def load_player_data(user_id: int) -> dict | None:
             player_data['stats'].setdefault('session_upgrades', 0)
             player_data['stats'].setdefault('session_collects', 0)
             player_data['stats'].setdefault('session_expansions', 0)
+            # --- Migration / Defaulting for shop names --- #
+            if player_data["shops"]:
+                for loc, shop_data in player_data["shops"].items():
+                    shop_data.setdefault("custom_name", loc) # Default name to location if missing
+                    # Ensure level and time exist too for consistency
+                    shop_data.setdefault("level", 1)
+                    shop_data.setdefault("last_collected_time", time.time())
+            # --- End Migration --- #
             return player_data
         else:
             logger.info(f"No player data found for {user_id}. Inserting default state.")
@@ -234,6 +244,7 @@ def save_player_data(user_id: int, data: dict) -> None:
     data.setdefault("total_income_earned", 0.0)
     data.setdefault("last_login_time", time.time()) # Use current time if missing
     data.setdefault("collection_count", 0) # Ensure collection_count key exists
+    data.setdefault("franchise_name", None) # Ensure key exists
 
     # Ensure default sub-dicts/lists for JSONB compatibility
     data["shops"] = data.get("shops") or {}
@@ -246,15 +257,23 @@ def save_player_data(user_id: int, data: dict) -> None:
     data['stats'].setdefault('session_collects', 0)
     data['stats'].setdefault('session_expansions', 0)
 
+    # Ensure shop sub-dictionaries have default names
+    if data["shops"]:
+        for loc, shop_data in data["shops"].items():
+            shop_data.setdefault("custom_name", loc)
+            shop_data.setdefault("level", 1)
+            shop_data.setdefault("last_collected_time", time.time())
+
     sql = """
     INSERT INTO players (
-        user_id, display_name, cash, pizza_coins, shops, unlocked_achievements, current_title,
+        user_id, display_name, franchise_name, cash, pizza_coins, shops, unlocked_achievements, current_title,
         active_challenges, challenge_progress, stats, total_income_earned, last_login_time,
         collection_count
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s), %s)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s), %s)
     ON CONFLICT (user_id) DO UPDATE SET
         display_name = EXCLUDED.display_name,
+        franchise_name = EXCLUDED.franchise_name,
         cash = EXCLUDED.cash,
         pizza_coins = EXCLUDED.pizza_coins,
         shops = EXCLUDED.shops,
@@ -280,6 +299,7 @@ def save_player_data(user_id: int, data: dict) -> None:
             cur.execute(sql, (
                 user_id,
                 data["display_name"],
+                data["franchise_name"],
                 data["cash"],
                 data["pizza_coins"],
                 shops_json,
@@ -329,13 +349,13 @@ def get_default_player_state(user_id: int) -> dict:
     return {
         "user_id": user_id,
         "display_name": None,
+        "franchise_name": None,
         "cash": float(INITIAL_CASH),
         "pizza_coins": 0,
         "shops": {
             INITIAL_SHOP_NAME: {
+                "custom_name": INITIAL_SHOP_NAME,
                 "level": 1,
-                # Store last_collected_time within the shop dict (as before)
-                # It will be saved as part of the shops JSONB
                 "last_collected_time": time.time()
             }
         },
@@ -558,6 +578,7 @@ def expand_shop(user_id: int, expansion_name: str) -> tuple[bool, str, list[str]
              return False, f"You don't meet the requirements to expand to {expansion_name} yet.", []
 
     player_data["shops"][expansion_name] = {
+        "custom_name": expansion_name,
         "level": 1,
         "last_collected_time": time.time()
     }
@@ -721,13 +742,15 @@ def format_status(player_data: dict) -> str:
     pizza_coins = player_data.get("pizza_coins", 0)
     shops = player_data.get("shops", {})
     total_income_earned = player_data.get("total_income_earned", 0)
+    franchise_name = player_data.get("franchise_name")
     title = player_data.get("current_title", None)
     achievements_unlocked = len(player_data.get("unlocked_achievements", []))
 
     title_str = f" Title: &lt;{title}&gt;" if title else ""
 
     status_lines = [
-        f"<b>--- Player Status (ID: {user_id}{title_str}) ---</b>",
+        f"<b>--- {franchise_name or 'Your Pizza Empire'} ---</b>",
+        f"(Player ID: {user_id})",
         f"<b>Cash:</b> ${cash:,.2f}",
         f"<b>Pizza Coins:</b> {pizza_coins:,} 🍕",
         f"<b>Total Income Earned:</b> ${total_income_earned:,.2f}",
@@ -739,8 +762,10 @@ def format_status(player_data: dict) -> str:
     else:
         for name, data in sorted(shops.items()):
             level = data.get("level", 1)
+            custom_name = data.get("custom_name", name)
             upgrade_cost = get_upgrade_cost(level, name)
-            status_lines.append(f"  - <b>{name}:</b> Level {level} (Upgrade Cost: ${upgrade_cost:,.2f})")
+            display_shop_name = f"{custom_name} ({name})" if custom_name != name else name
+            status_lines.append(f"  - <b>{display_shop_name}:</b> Level {level} (Upgrade Cost: ${upgrade_cost:,.2f})")
 
     income_rate = calculate_income_rate(shops)
     status_lines.append(f"<b>Current Income Rate:</b> ${income_rate:.2f}/sec")
