@@ -480,7 +480,7 @@ async def challenges_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             status_str = " ✅ Completed!" if is_complete else progress_str
 
             lines.append(f"  - {challenge['description']}{status_str}")
-            lines.append(f"    Reward: {challenge['reward_value']} {challenge['reward_type'].upper()}")
+            lines.append(f"    Reward: {challenge['reward_value']:,} {challenge['reward_type'].upper()}")
         else:
             # This case should ideally not happen now, but keep as fallback
             lines.append("  Error generating challenge. Check logs or try again later.")

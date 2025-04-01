@@ -661,7 +661,8 @@ def update_challenge_progress(player_data: dict, updated_metrics: list[str]) -> 
                 logger.info(f"User {user_id} completed {timescale} challenge: {challenge['description']}")
                 reward_type = challenge["reward_type"]
                 reward_value = challenge["reward_value"]
-                msg = f"🎉 Challenge Complete! 🎉\n\"{challenge['description']}\"\nReward: {reward_value} {reward_type.upper()}!"
+                # Format reward value with commas
+                msg = f"🎉 Challenge Complete! 🎉\n\"{challenge['description']}\"\nReward: {reward_value:,} {reward_type.upper()}!"
 
                 # Grant reward
                 if reward_type == 'cash':
@@ -694,7 +695,7 @@ def format_status(player_data: dict) -> str:
     status_lines = [
         f"<b>--- Player Status (ID: {user_id}{title_str}) ---</b>",
         f"<b>Cash:</b> ${cash:,.2f}",
-        f"<b>Pizza Coins:</b> {pizza_coins} 🍕",
+        f"<b>Pizza Coins:</b> {pizza_coins:,} 🍕",
         f"<b>Total Income Earned:</b> ${total_income_earned:,.2f}",
         f"<b>Achievements Unlocked:</b> {achievements_unlocked}",
         "<b>Shops:</b>"
