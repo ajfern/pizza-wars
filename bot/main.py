@@ -17,8 +17,7 @@ from telegram.ext import (
     filters,
     PreCheckoutQueryHandler,
     ShippingQueryHandler,
-    CallbackQueryHandler,
-    ptb_change_management # <<< Import change management
+    CallbackQueryHandler
 )
 
 # Scheduling
@@ -925,13 +924,8 @@ async def renameshop_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 def main() -> None:
     """Start the bot and scheduler."""
     logger.info("Building Telegram Application...")
-    # Enable v21 change management explicitly
-    application = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .defaults(ptb_change_management.Defaults(version=ptb_change_management.VERSION_21_0))
-        .build()
-    )
+    # Revert Application builder to simpler form
+    application = Application.builder().token(BOT_TOKEN).build()
     logger.info("Telegram Application built successfully.")
 
     logger.info("Adding command handlers...")
