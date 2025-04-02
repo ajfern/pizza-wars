@@ -496,15 +496,26 @@ async def expansion_choice_callback(update: Update, context: ContextTypes.DEFAUL
     """Handles button presses for selecting an expansion location."""
     query = update.callback_query
     user = query.from_user
-    logger.info(f"Received expansion callback query from user {user.id}. Data: {query.data}") # Added log
-    await query.answer() # Answer callback query quickly
+    logger.info(f"--- expansion_choice_callback ENTERED by user {user.id} ---") # <<< Log Entry
+
+    try:
+        await query.answer() # Answer callback query quickly
+        logger.info(f"Callback query answered for user {user.id}.") # <<< Log Answer
+    except Exception as e:
+        logger.error(f"ERROR answering callback query for expansion: {e}", exc_info=True)
+        # If answering fails, we likely can't edit the message either, just log.
+        return
 
     # Extract location from callback data (e.g., "expand_London")
     try:
         target_location = query.data.split("expand_", 1)[1]
+        logger.info(f"Parsed target_location: {target_location} for user {user.id}") # <<< Log Parse
     except IndexError:
         logger.warning(f"Invalid expansion callback data received: {query.data}")
-        await query.edit_message_text("Invalid choice.") # Edit the message text
+        try:
+            await query.edit_message_text("Invalid choice.")
+        except Exception as edit_err:
+             logger.error(f"Failed to edit message on invalid callback data: {edit_err}")
         return
 
     logger.info(f"User {user.id} chose to expand to {target_location} via button.")
