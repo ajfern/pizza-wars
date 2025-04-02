@@ -77,6 +77,7 @@ BASE_INCOME_PER_SECOND = 0.1
 BASE_UPGRADE_COST = 75
 UPGRADE_COST_MULTIPLIER = 1.75
 UPGRADE_FAILURE_CHANCE = 0.15 # 15% chance for an upgrade to fail
+BASE_EXPANSION_COST = 1000 # Base cost to expand
 
 # Expansion: Location: (Req Type, Req Val, GDP Factor, Cost Scale Factor)
 # Req Types: 'level' (initial shop level), 'total_income', 'shops_count', 'has_shop' (requires specific shop)
@@ -458,6 +459,21 @@ def collect_income(user_id: int) -> tuple[float, list[str], bool, float | None]:
 
 # --- Upgrade & Expansion Logic (Modified for failure chance) ---
 
+def get_expansion_cost(shop_name: str) -> float:
+    """Calculates the cost to expand to a new location."""
+    base_cost = BASE_EXPANSION_COST
+    cost_scale = 1.0 # Default if not found (shouldn't happen)
+    if shop_name in EXPANSION_LOCATIONS:
+        # Cost Scale Factor is the 4th element (index 3)
+        if len(EXPANSION_LOCATIONS[shop_name]) > 3:
+             cost_scale = EXPANSION_LOCATIONS[shop_name][3]
+        else:
+             logger.warning(f"Missing cost scale factor for expansion {shop_name} in cost calculation, using 1.0")
+    else:
+         logger.warning(f"Shop name {shop_name} not found in EXPANSION_LOCATIONS for cost calculation.")
+
+    return round(base_cost * cost_scale, 2)
+
 def get_upgrade_cost(current_level: int, shop_name: str) -> float:
     """Calculates the cost to upgrade to the next level, considering location."""
     base_location_cost = BASE_UPGRADE_COST
@@ -551,8 +567,10 @@ def get_available_expansions(player_data: dict) -> list[str]:
     return available
 
 def expand_shop(user_id: int, expansion_name: str) -> tuple[bool, str, list[str]]:
-    """Attempts to establish a new shop. Returns (success, message, completed_challenge_messages)."""
+    """Attempts to establish a new shop, checking and deducting cost."""
     player_data = load_player_data(user_id)
+    if not player_data: return False, "Failed to load player data.", []
+
     available_expansions = get_available_expansions(player_data)
     completed_challenges = []
 
@@ -577,6 +595,18 @@ def expand_shop(user_id: int, expansion_name: str) -> tuple[bool, str, list[str]
         else:
              return False, f"You don't meet the requirements to expand to {expansion_name} yet.", []
 
+    # --- Expansion Cost Check --- #
+    expansion_cost = get_expansion_cost(expansion_name)
+    current_cash = player_data.get("cash", 0)
+
+    if current_cash < expansion_cost:
+        return False, f"Not enough cash to expand to {expansion_name}! Need ${expansion_cost:,.2f}, you have ${current_cash:,.2f}.", []
+    # --- End Cost Check --- #
+
+    # Deduct cost, add shop, update stats
+    player_data["cash"] = current_cash - expansion_cost
+    logger.info(f"User {user_id} expanding to {expansion_name}. Cost: ${expansion_cost:,.2f}. New cash: ${player_data['cash']:.2f}")
+
     player_data["shops"][expansion_name] = {
         "custom_name": expansion_name,
         "level": 1,
@@ -584,12 +614,11 @@ def expand_shop(user_id: int, expansion_name: str) -> tuple[bool, str, list[str]
     }
     player_data["stats"]["session_expansions"] = player_data["stats"].get("session_expansions", 0) + 1
 
-    # Check challenges after updating stats
     completed_challenges = update_challenge_progress(player_data, ["session_expansions"])
-
     save_player_data(user_id, player_data)
-    income_rate = calculate_income_rate(player_data["shops"])
-    msg = f"Congratulations! You've expanded your pizza empire to {expansion_name}! New total income rate: ${income_rate:.2f}/sec."
+
+    # Return success message (main.py handles cheeky message)
+    msg = f"Expansion to {expansion_name} successful! Cost: ${expansion_cost:,.2f}"
     return True, msg, completed_challenges
 
 # --- Achievement Logic ---
@@ -777,8 +806,8 @@ def format_status(player_data: dict) -> str:
     status_lines.append("<b>Available Expansions:</b>")
     if available_expansions:
         for loc in available_expansions:
-             # Unpack all 4 values here too
-             req_type, req_value, gdp_factor, _cost_scale = EXPANSION_LOCATIONS[loc] # Expecting 4
+             req_type, req_value, gdp_factor, _cost_scale = EXPANSION_LOCATIONS[loc]
+             expansion_cost = get_expansion_cost(loc) # Get cost
              # Display requirement
              if req_type == "level": req_str = f"(Req: {INITIAL_SHOP_NAME} Lvl {req_value})"
              elif req_type == "total_income": req_str = f"(Req: Total Earned ${req_value:,.2f})"
@@ -786,8 +815,9 @@ def format_status(player_data: dict) -> str:
              elif req_type == "has_shop": req_str = f"(Req: Own {req_value})"
              else: req_str = "(Unknown Req)"
              # Display potential
-             potential_str = f"📈x{gdp_factor:.1f}" # Show GDP Factor
-             status_lines.append(f"  - {loc} {potential_str} {req_str} - Use /expand {loc.lower()}")
+             potential_str = f"📈x{gdp_factor:.1f}"
+             # Add cost to display
+             status_lines.append(f"  - {loc} {potential_str} - Cost: ${expansion_cost:,.2f} {req_str} - Use /expand {loc.lower()}")
     else:
         status_lines.append("  None available right now. Keep upgrading!")
 

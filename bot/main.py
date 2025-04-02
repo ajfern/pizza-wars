@@ -408,7 +408,7 @@ async def expand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _process_expansion(update, context, user.id, target_expansion_name)
         return
 
-    # --- No arguments: Show available expansions with buttons --- #
+    # --- No arguments: Show available expansions with buttons & costs --- #
     logger.info(f"User {user.id} requested expansion list.")
     player_data = game.load_player_data(user.id)
     if not player_data:
@@ -425,8 +425,9 @@ async def expand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     row = []
     for i, loc in enumerate(available):
         gdp_factor = game.EXPANSION_LOCATIONS[loc][2]
-        button_text = f"{loc} (📈x{gdp_factor:.1f})"
-        # Create rows of 2 buttons
+        cost = game.get_expansion_cost(loc)
+        # Add cost to button text
+        button_text = f"{loc} (📈x{gdp_factor:.1f} | ${cost:,.0f})"
         row.append(InlineKeyboardButton(button_text, callback_data=f"expand_{loc}"))
         if (i + 1) % 2 == 0:
             keyboard.append(row)
@@ -435,7 +436,7 @@ async def expand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         keyboard.append(row)
 
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Ready to expand the empire? Choose your next conquest:", reply_markup=reply_markup)
+    await update.message.reply_text("Ready to expand the empire? Choose your next conquest (Cost shown):", reply_markup=reply_markup)
 
 # --- Helper for processing expansion --- #
 async def _process_expansion(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, target_expansion_name: str):
@@ -620,8 +621,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/renameshop [loc] [name] - Rename a specific shop (e.g., `/renameshop Brooklyn Luigi's`).\n"
         "/status - Check your cash, shops, title, and achievements.\n"
         "/collect - Scoop up the cash your shops have earned!\n"
-        "/upgrade [shop] - List upgrade options or upgrade a specific shop (e.g., `/upgrade Brooklyn`).\n"
-        "/expand [location] - List expansion options or expand to a new location (e.g., `/expand Manhattan`).\n\n"
+        "/upgrade [shop] - List upgrade options or upgrade a specific shop.\n"
+        "/expand [location] - List expansion options (with costs!) or expand to a new location.\n\n"
         "<b>Progression & Fun:</b>\n"
         "/challenges - View your current daily and weekly challenges.\n"
         "/leaderboard - See who's top dog on the global leaderboard.\n"
