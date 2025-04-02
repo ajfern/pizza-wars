@@ -18,6 +18,7 @@ from telegram.ext import (
     PreCheckoutQueryHandler,
     ShippingQueryHandler,
     CallbackQueryHandler,
+    ptb_change_management # <<< Import change management
 )
 
 # Scheduling
@@ -924,8 +925,13 @@ async def renameshop_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 def main() -> None:
     """Start the bot and scheduler."""
     logger.info("Building Telegram Application...")
-    # Pass context=application for scheduler jobs to access bot
-    application = Application.builder().token(BOT_TOKEN).build()
+    # Enable v21 change management explicitly
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .defaults(ptb_change_management.Defaults(version=ptb_change_management.VERSION_21_0))
+        .build()
+    )
     logger.info("Telegram Application built successfully.")
 
     logger.info("Adding command handlers...")
@@ -949,8 +955,15 @@ def main() -> None:
     logger.info("Adding unknown command handler...")
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
-    # --- Add Mafia Callback Handler --- #
+    # --- Add Callback Handlers (Order Matters!) --- #
+    logger.info("Adding callback handlers...")
+    # TEMPORARY: Catch-all handler for debugging - MUST be removed later
+    # application.add_handler(CallbackQueryHandler(lambda u, c: logger.info(f"--- Broad Callback Hit! Data: {u.callback_query.data} ---")))
+
+    # Specific Callback Handlers
     application.add_handler(CallbackQueryHandler(mafia_button_callback, pattern="^mafia_(pay|refuse)$"))
+    application.add_handler(CallbackQueryHandler(expansion_choice_callback, pattern="^expand_")) # Using simplified pattern
+    application.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_.*"))
 
     # Schedule challenge generation jobs
     logger.info("Setting up scheduled jobs...")
