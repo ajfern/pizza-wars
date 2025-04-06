@@ -3,6 +3,8 @@ import os
 import glob # For finding player data files
 import random # For tips!
 import time # <<< Added missing import
+import re # For sanitization
+import html # For escaping
 from datetime import time as dt_time, timedelta
 
 # Telegram Core Types
@@ -27,6 +29,9 @@ from apscheduler.triggers.cron import CronTrigger
 
 # Import game logic functions
 import game # Corrected import
+
+# Summary Version - CHANGE THIS WHEN UPDATING change_summary.txt
+CURRENT_SUMMARY_VERSION = "20250406-v1"
 
 # Enable logging (ensure logger is configured as before)
 logging.basicConfig(
@@ -88,6 +93,27 @@ async def send_challenge_notifications(user_id: int, messages: list[str], contex
             await context.bot.send_message(chat_id=user_id, text=msg)
     except Exception as e:
         logger.error(f"Error sending challenge notification to {user_id}: {e}", exc_info=True)
+
+# --- Helper Function to send summary ---
+async def send_change_summary(user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"Sending change summary version {CURRENT_SUMMARY_VERSION} to user {user_id}")
+    try:
+        with open("change_summary.txt", "r") as f:
+            summary_text = f.read()
+        # Maybe add a header/footer?
+        full_message = f"📢 <b>Recent Game Updates ({CURRENT_SUMMARY_VERSION}):</b>\n\n{summary_text}"
+        await context.bot.send_message(chat_id=user_id, text=full_message, parse_mode="HTML")
+        # Update player's seen version in DB
+        player_data = game.load_player_data(user_id)
+        if player_data:
+            player_data["last_summary_seen_version"] = CURRENT_SUMMARY_VERSION
+            game.save_player_data(user_id, player_data)
+        else:
+             logger.warning(f"Could not load player data for {user_id} after sending summary to update seen version.")
+    except FileNotFoundError:
+        logger.error("change_summary.txt not found!")
+    except Exception as e:
+        logger.error(f"Error sending change summary to {user_id}: {e}", exc_info=True)
 
 # --- Utility function to update name ---
 async def update_player_display_name(user_id: int, user: "telegram.User | None"):
@@ -168,6 +194,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
              return
 
         logger.info(f"Player data loaded for {user.id}.")
+
+        # --- Check if summary needs to be shown --- #
+        last_seen_version = player_data.get("last_summary_seen_version")
+        if last_seen_version != CURRENT_SUMMARY_VERSION:
+            await send_change_summary(user.id, context)
+            # Update the local dict too, though save happens in send_change_summary
+            player_data["last_summary_seen_version"] = CURRENT_SUMMARY_VERSION
+        # --- End Summary Check --- #
 
         # --- Check if player seems new based on default data --- #
         # (e.g., exactly initial cash AND only the starting shop at level 1)
@@ -902,7 +936,6 @@ async def setname_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # Basic sanitization: Remove potential HTML tags just in case
     # A more robust solution might involve allowing specific safe tags or using a library
-    import re
     sanitized_name = re.sub('<[^<]+?>', '', new_name) # Strip HTML tags
     if not sanitized_name:
          await update.message.reply_text("C'mon, give it a real name!")
@@ -918,7 +951,6 @@ async def setname_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         player_data["franchise_name"] = sanitized_name
         game.save_player_data(user.id, player_data)
         # Use html.escape for displaying user-provided name safely in HTML context
-        import html
         await update.message.reply_html(f"Alright, your pizza empire shall henceforth be known as: <b>{html.escape(sanitized_name)}</b>! Good luck!")
 
     except Exception as e:
@@ -951,7 +983,6 @@ async def renameshop_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     # Basic sanitization
-    import re
     sanitized_new_name = re.sub('<[^<]+?>', '', new_custom_name)
     if not sanitized_new_name:
          await update.message.reply_text("C'mon, give it a real name (no funny HTML stuff)!")
@@ -982,7 +1013,6 @@ async def renameshop_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         player_data["shops"] = shops # Ensure the shops dict is updated in player_data
         game.save_player_data(user.id, player_data)
 
-        import html
         await update.message.reply_html(f"Alright, your shop at {target_location_key} is now proudly called: <b>{html.escape(sanitized_new_name)}</b>!")
 
     except Exception as e:

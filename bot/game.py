@@ -59,7 +59,8 @@ def initialize_database():
         total_income_earned NUMERIC(18, 4) DEFAULT 0.0,
         last_login_time TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         collection_count INTEGER DEFAULT 0,
-        last_sabotage_attempt_time TIMESTAMP WITH TIME ZONE
+        last_sabotage_attempt_time TIMESTAMP WITH TIME ZONE,
+        last_summary_seen_version TEXT
     );
     """
     create_perf_sql = """
@@ -194,7 +195,7 @@ def load_player_data(user_id: int) -> dict | None:
     sql = """
     SELECT display_name, franchise_name, cash, pizza_coins, shops, unlocked_achievements, current_title,
            active_challenges, challenge_progress, stats, total_income_earned, last_login_time,
-           collection_count, last_sabotage_attempt_time
+           collection_count, last_sabotage_attempt_time, last_summary_seen_version
     FROM players WHERE user_id = %s;
     """
     default_state = get_default_player_state(user_id)
@@ -221,7 +222,8 @@ def load_player_data(user_id: int) -> dict | None:
                 "total_income_earned": float(result[10]),
                 "last_login_time": result[11].timestamp() if result[11] else time.time(),
                 "collection_count": result[12] or 0,
-                "last_sabotage_attempt_time": result[13].timestamp() if result[13] else 0.0
+                "last_sabotage_attempt_time": result[13].timestamp() if result[13] else 0.0,
+                "last_summary_seen_version": result[14]
             }
             player_data.setdefault("active_challenges", {'daily': None, 'weekly': None})
             player_data.setdefault("challenge_progress", {'daily': {}, 'weekly': {}})
@@ -277,6 +279,7 @@ def save_player_data(user_id: int, data: dict) -> None:
     data.setdefault("collection_count", 0) # Ensure collection_count key exists
     data.setdefault("franchise_name", None) # Ensure key exists
     data.setdefault("last_sabotage_attempt_time", 0.0) # <<< Added default
+    data.setdefault("last_summary_seen_version", None) # <<< Added default
 
     # Ensure default sub-dicts/lists for JSONB compatibility
     data["shops"] = data.get("shops") or {}
@@ -301,9 +304,9 @@ def save_player_data(user_id: int, data: dict) -> None:
     INSERT INTO players (
         user_id, display_name, franchise_name, cash, pizza_coins, shops, unlocked_achievements, current_title,
         active_challenges, challenge_progress, stats, total_income_earned, last_login_time,
-        collection_count, last_sabotage_attempt_time
+        collection_count, last_sabotage_attempt_time, last_summary_seen_version
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s), %s, to_timestamp(%s))
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s), %s, to_timestamp(%s), %s)
     ON CONFLICT (user_id) DO UPDATE SET
         display_name = EXCLUDED.display_name,
         franchise_name = EXCLUDED.franchise_name,
@@ -318,7 +321,8 @@ def save_player_data(user_id: int, data: dict) -> None:
         total_income_earned = EXCLUDED.total_income_earned,
         last_login_time = EXCLUDED.last_login_time,
         collection_count = EXCLUDED.collection_count,
-        last_sabotage_attempt_time = EXCLUDED.last_sabotage_attempt_time;
+        last_sabotage_attempt_time = EXCLUDED.last_sabotage_attempt_time,
+        last_summary_seen_version = EXCLUDED.last_summary_seen_version;
     """
     try:
         # Convert complex types to JSON strings for psycopg2 if needed,
@@ -345,7 +349,8 @@ def save_player_data(user_id: int, data: dict) -> None:
                 data["total_income_earned"],
                 data["last_login_time"],
                 data["collection_count"],
-                data["last_sabotage_attempt_time"]
+                data["last_sabotage_attempt_time"],
+                data["last_summary_seen_version"]
             ))
         conn.commit()
         logger.debug(f"Successfully saved data for user {user_id}.")
@@ -406,7 +411,8 @@ def get_default_player_state(user_id: int) -> dict:
         "total_income_earned": 0.0,
         "last_login_time": time.time(),
         "collection_count": 0,
-        "last_sabotage_attempt_time": 0.0
+        "last_sabotage_attempt_time": 0.0,
+        "last_summary_seen_version": None
     }
 
 # --- Income Calculation (Uses GDP Factor) ---

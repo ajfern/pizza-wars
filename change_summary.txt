@@ -1,0 +1,10 @@
+# Recent Pizza Wars Updates! 🍕
+
+Hey Boss! Here's what's new in the empire:
+
+*   **Sabotage Overhaul:** Sending agents is riskier now! Costs more, lower success chance, and a chance it could backfire onto YOUR shop! There's also a cooldown.
+*   **William's Wallet:** Check the new `/leaderboard` command - it now shows who's holding the most cash right now, alongside the all-time earners.
+*   **Shop Names:** You can now give your individual shops custom names with `/renameshop [location] [new name]`!
+*   **Bug Fixes & Balancing:** Squashed some bugs (like that pesky double-collection exploit) and tweaked some costs.
+
+Keep building that empire! 
