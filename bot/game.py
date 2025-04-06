@@ -1198,3 +1198,10 @@ def find_user_by_display_name(display_name: str) -> list[int]:
         logger.error(f"Unexpected error finding user by display name '{display_name}': {e}", exc_info=True)
 
     return user_ids
+
+def get_shop_custom_name(user_id: int, location_name: str) -> str | None:
+    """Fetches the custom name of a specific shop for a user."""
+    player_data = load_player_data(user_id)
+    if not player_data:
+        return location_name # Fallback if data load fails
+    return player_data.get("shops", {}).get(location_name, {}).get("custom_name", location_name)
