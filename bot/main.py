@@ -2,6 +2,7 @@ import logging
 import os
 import glob # For finding player data files
 import random # For tips!
+import time # <<< Added missing import
 from datetime import time as dt_time, timedelta
 
 # Telegram Core Types
