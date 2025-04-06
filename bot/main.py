@@ -1282,6 +1282,53 @@ async def _process_sabotage(context: ContextTypes.DEFAULT_TYPE, attacker_user_id
         attacker_data["last_sabotage_attempt_time"] = attempt_time
         game.save_player_data(attacker_user_id, attacker_data)
 
+# --- Main Menu Callback Handler --- #
+async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles button presses from the main action keyboard shown with /status."""
+    query = update.callback_query
+    user = query.from_user
+    action = query.data
+    logger.info(f"--- main_menu_callback ENTERED by user {user.id}, action: {action} ---") # <<< Log Entry
+
+    # Answer callback query quickly
+    try:
+        await query.answer()
+        logger.info(f"Callback query answered for main_menu action {action}, user {user.id}.")
+    except Exception as e:
+        logger.error(f"ERROR answering callback query for main_menu: {e}", exc_info=True)
+        return # Can't proceed if answer fails
+
+    # Simple implementation: Guide user to the text command
+    command_map = {
+        "main_collect": ("collect", "Use /collect to scoop up your dough!"),
+        "main_upgrade": ("upgrade", "Use /upgrade [shop_name] to boost a shop, or just /upgrade to see options."),
+        "main_expand": ("expand", "Use /expand [location_name] to grow your empire, or just /expand to see options."),
+        "main_challenges": ("challenges", "Use /challenges to see your current tasks."),
+        "main_leaderboard": ("leaderboard", "Use /leaderboard to check the top players."),
+        "main_buycoins": ("buycoins", "Use /buycoins to get more Pizza Coins."),
+        "main_help": ("help", "Use /help to see all commands."),
+    }
+
+    if action in command_map:
+        command, guidance_text = command_map[action]
+        logger.info(f"User {user.id} pressed '{action}' button. Sending guidance.")
+        try:
+            # Send guidance as a new message
+            await context.bot.send_message(chat_id=query.message.chat_id, text=guidance_text)
+            logger.debug(f"Guidance message sent for action {action}.")
+            # Edit the original message to remove the keyboard
+            await query.edit_message_reply_markup(reply_markup=None)
+            logger.debug(f"Original keyboard removed for action {action}.")
+        except Exception as e:
+             logger.error(f"Error sending guidance/editing markup for action {action}: {e}", exc_info=True)
+    else:
+        logger.warning(f"Received unknown main_menu callback query data: {action}")
+        try:
+            await context.bot.send_message(chat_id=query.message.chat_id, text="Sorry, that button seems outdated.")
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception as e:
+             logger.warning(f"Failed to send unknown button message or edit markup: {e}")
+
 def main() -> None:
     """Start the bot and scheduler."""
     logger.info("Building Telegram Application...")
@@ -1317,7 +1364,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(expansion_choice_callback, pattern="^expand_"))
     application.add_handler(CallbackQueryHandler(sabotage_choice_callback, pattern="^sabotage_"))
     application.add_handler(CallbackQueryHandler(sabotage_shop_choice_callback, pattern="^sabo_shop_"))
-    # application.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_.*")) # <<< Ensure this is removed/commented
+    application.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_.*"))
 
     # Schedule challenge generation jobs
     logger.info("Setting up scheduled jobs...")
