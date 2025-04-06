@@ -91,14 +91,19 @@ EXPANSION_LOCATIONS = {
     "Philadelphia": ("level", 15, 1.8, 1.8),     # Req: Brooklyn Lvl 15
     "Albany":       ("total_income", 25000, 1.4, 1.5),     # Req: Total Earned $25k
     "Chicago":      ("shops_count", 5, 2.5, 2.5),     # Req: Own 5 Shops Total
+    "Los Angeles":  ("shop_level", "Manhattan", 10, 3.0, 3.0), # <<< New: Req Manhattan Lvl 10
+    "Miami":        ("shop_level", "Philadelphia", 10, 2.2, 2.8), # <<< New: Req Philly Lvl 10
     # Europe
     "London":       ("total_income", 100000, 3.5, 4.0),     # Req: Total Earned $100k
     "Paris":        ("has_shop", "London", 3.2, 3.8),     # Req: Own London shop
+    "Rome":         ("has_shop", "Paris", 5, 3.0, 3.5),    # <<< New: Req Paris Lvl 5
     # Asia
     "Tokyo":        ("total_income", 500000, 5.0, 6.0),     # Req: Total Earned $500k
     "Beijing":      ("has_shop", "Tokyo", 4.5, 5.5),     # Req: Own Tokyo shop
+    "Dubai":        ("has_shop", "Chicago", 4.8, 6.5),    # <<< New: Req Own Chicago
     # Americas (Other)
     "Mexico City":  ("shops_count", 7, 2.0, 2.0),     # Req: Own 7 Shops Total
+    "Rio de Janeiro": ("has_shop", "Mexico City", 1.8, 2.2), # <<< New: Req Own Mexico City
     # Oceania
     "Sydney":       ("total_income", 250000, 2.8, 3.5),     # Req: Total Earned $250k
 }
@@ -123,6 +128,8 @@ ACHIEVEMENTS = {
     "statewide": ("Empire State of Mind", "Expand to Albany", ('has_shop', "Albany"), 1, 'pizza_coins', 75, None),
     "london_calling": ("London Calling", "Expand to London", ('has_shop', "London"), 1, 'pizza_coins', 150, "Globetrotter"),
     "asia_expansion": ("Taste of the East", "Expand to Tokyo", ('has_shop', "Tokyo"), 1, 'pizza_coins', 200, None),
+    "la_la_land": ("La La Land", "Expand to Los Angeles", ('has_shop', "Los Angeles"), 1, 'pizza_coins', 100, "West Coast Boss"), # <<< New
+    "roman_holiday": ("Roman Holiday", "Expand to Rome", ('has_shop', "Rome"), 1, 'pizza_coins', 125, None), # <<< New
     # Add more achievements: rivals defeated (requires rival logic), specific shop levels, etc.
 }
 
@@ -551,12 +558,25 @@ def get_available_expansions(player_data: dict) -> list[str]:
     initial_shop_level = owned_shops.get(INITIAL_SHOP_NAME, {}).get("level", 1)
     total_income = player_data.get("total_income_earned", 0)
 
-    for name, (req_type, req_value, _gdp_factor, _cost_scale) in EXPANSION_LOCATIONS.items():
+    for name, req_data in EXPANSION_LOCATIONS.items():
         if name in owned_shops:
             continue
+
+        # Unpack based on expected length for safety
+        req_type = req_data[0]
+        req_value = req_data[1]
+
         met_requirement = False
-        if req_type == "level":
+        if req_type == "level": # This was initially just for Brooklyn
+            # Assume 'level' requirement still refers to INITIAL_SHOP_NAME level for now
+            # unless we redesign requirements significantly
             if initial_shop_level >= req_value:
+                met_requirement = True
+        elif req_type == "shop_level": # New: Requirement on a specific OTHER shop's level
+            required_shop_name = req_value # In this case, req_value is the shop name
+            required_level = req_data[2]   # The actual level needed is now 3rd element
+            current_shop_level = owned_shops.get(required_shop_name, {}).get("level", 0)
+            if current_shop_level >= required_level:
                 met_requirement = True
         elif req_type == "total_income":
             if total_income >= req_value:
@@ -564,7 +584,7 @@ def get_available_expansions(player_data: dict) -> list[str]:
         elif req_type == "shops_count":
             if len(owned_shops) >= req_value:
                  met_requirement = True
-        elif req_type == "has_shop": # Check for prerequisite shop
+        elif req_type == "has_shop":
              prereq_shop = req_value
              if prereq_shop in owned_shops:
                   met_requirement = True
@@ -588,19 +608,19 @@ def expand_shop(user_id: int, expansion_name: str) -> tuple[bool, str, list[str]
         return False, f"You already have a shop in {expansion_name}!", []
 
     if expansion_name not in available_expansions:
-        req_type, req_value, _gdp, _cost = EXPANSION_LOCATIONS[expansion_name] # Expecting 4
-        if req_type == "level":
-            return False, f"You can't expand to {expansion_name} yet. Requires {INITIAL_SHOP_NAME} to be Level {req_value}.", []
-        elif req_type == "total_income":
-             return False, f"You can't expand to {expansion_name} yet. Requires ${req_value:,.2f} total income earned.", []
-        elif req_type == "shops_count":
-             owned_count = len(player_data.get("shops", {}))
-             return False, f"You can't expand to {expansion_name} yet. Requires {req_value} total shops (you have {owned_count}).", []
-        elif req_type == "has_shop":
-             prereq_shop = req_value
-             return False, f"You can't expand to {expansion_name} yet. Requires owning a shop in {prereq_shop}.", []
-        else:
-             return False, f"You don't meet the requirements to expand to {expansion_name} yet.", []
+        req_data = EXPANSION_LOCATIONS[expansion_name]
+        req_type = req_data[0]
+        req_value = req_data[1]
+
+        # Generate requirement message
+        req_msg = f"You don't meet the requirements to expand to {expansion_name} yet."
+        if req_type == "level": req_msg = f"Requires {INITIAL_SHOP_NAME} Lvl {req_value}."
+        elif req_type == "shop_level": req_msg = f"Requires {req_value} Lvl {req_data[2]}."
+        elif req_type == "total_income": req_msg = f"Requires ${req_value:,.2f} total income earned."
+        elif req_type == "shops_count": req_msg = f"Requires {req_value} total shops (you have {len(player_data.get("shops", {}))})."
+        elif req_type == "has_shop": req_msg = f"Requires owning a shop in {req_value}."
+
+        return False, f"Can't expand to {expansion_name} yet. {req_msg}", []
 
     # --- Expansion Cost Check --- #
     expansion_cost = get_expansion_cost(expansion_name)
@@ -813,18 +833,23 @@ def format_status(player_data: dict) -> str:
     status_lines.append("<b>Available Expansions:</b>")
     if available_expansions:
         for loc in available_expansions:
-             req_type, req_value, gdp_factor, _cost_scale = EXPANSION_LOCATIONS[loc]
-             expansion_cost = get_expansion_cost(loc) # Get cost
-             # Display requirement
-             if req_type == "level": req_str = f"(Req: {INITIAL_SHOP_NAME} Lvl {req_value})"
-             elif req_type == "total_income": req_str = f"(Req: Total Earned ${req_value:,.2f})"
-             elif req_type == "shops_count": req_str = f"(Req: {req_value} Shops)"
-             elif req_type == "has_shop": req_str = f"(Req: Own {req_value})"
-             else: req_str = "(Unknown Req)"
-             # Display potential
-             potential_str = f"📈x{gdp_factor:.1f}"
-             # Add cost to display
-             status_lines.append(f"  - {loc} {potential_str} - Cost: ${expansion_cost:,.2f} {req_str} - Use /expand {loc.lower()}")
+            req_data = EXPANSION_LOCATIONS[loc]
+            req_type = req_data[0]
+            req_value = req_data[1]
+            gdp_factor = req_data[2]
+            cost_scale = req_data[3]
+            expansion_cost = get_expansion_cost(loc)
+
+            # Display requirement based on type
+            if req_type == "level": req_str = f"(Req: {INITIAL_SHOP_NAME} Lvl {req_value})"
+            elif req_type == "shop_level": req_str = f"(Req: {req_value} Lvl {req_data[2]})" # Use 3rd element for level
+            elif req_type == "total_income": req_str = f"(Req: Total Earned ${req_value:,.2f})"
+            elif req_type == "shops_count": req_str = f"(Req: {req_value} Shops)"
+            elif req_type == "has_shop": req_str = f"(Req: Own {req_value})"
+            else: req_str = "(Unknown Req)"
+
+            potential_str = f"📈x{gdp_factor:.1f}"
+            status_lines.append(f"  - {loc} {potential_str} - Cost: ${expansion_cost:,.2f} {req_str} - Use /expand {loc.lower()}")
     else:
         status_lines.append("  None available right now. Keep upgrading!")
 
