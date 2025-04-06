@@ -423,35 +423,42 @@ def collect_income(user_id: int) -> tuple[float, list[str], bool, float | None]:
     mafia_demand = None
 
     if uncollected > 0.01:
-        # Increment collection count ALWAYS before deciding outcome
+        # --- Update collection time and count FIRST --- #
+        current_time = time.time()
+        for shop_name in player_data["shops"]:
+            # Ensure shop_data exists before accessing
+            if shop_name in player_data.get("shops", {}):
+                 player_data["shops"][shop_name]["last_collected_time"] = current_time
+            else:
+                 logger.warning(f"Shop {shop_name} found in keys but not in dict during collect for user {user_id}")
+
         player_data["collection_count"] = player_data.get("collection_count", 0) + 1
         collection_count = player_data["collection_count"]
         logger.info(f"User {user_id} collection attempt #{collection_count}. Amount: ${uncollected:.2f}")
 
+        # Save the updated time and count *before* deciding the outcome
+        # This prevents collecting the same time window again if Mafia event happens
+        save_player_data(user_id, player_data)
+        # --- End Time/Count Update --- #
+
         # --- Check for Mafia Event --- #
         if collection_count > 0 and collection_count % 5 == 0:
             is_mafia_event = True
-            # Calculate demand (e.g., 10-75% of uncollected)
             demand_percentage = random.uniform(0.10, 0.75)
             mafia_demand = round(uncollected * demand_percentage, 2)
             logger.info(f"Mafia event triggered for user {user_id}! Demand: ${mafia_demand:.2f} ({demand_percentage*100:.1f}%)")
-            # DO NOT add cash yet. DO NOT check challenges/tips yet.
-            # Save only the incremented collection count.
-            save_player_data(user_id, player_data)
+            # Return amount calculated from OLD time, but timestamps/count are already saved
             return uncollected, [], is_mafia_event, mafia_demand
         else:
             # --- Normal Collection --- #
+            # Timestamps and count already saved, now just add cash/stats
             player_data["cash"] = player_data.get("cash", 0) + uncollected
             player_data["total_income_earned"] = player_data.get("total_income_earned", 0) + uncollected
             player_data["stats"]["session_income"] = player_data["stats"].get("session_income", 0) + uncollected
             player_data["stats"]["session_collects"] = player_data["stats"].get("session_collects", 0) + 1
 
-            current_time = time.time()
-            for shop_name in player_data["shops"]:
-                player_data["shops"][shop_name]["last_collected_time"] = current_time
-
             completed_challenges = update_challenge_progress(player_data, ["session_income", "session_collects"])
-            save_player_data(user_id, player_data)
+            save_player_data(user_id, player_data) # Save cash/stats update
             return uncollected, completed_challenges, is_mafia_event, mafia_demand
     else:
         # Nothing to collect, still return structure
