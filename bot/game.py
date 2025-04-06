@@ -68,12 +68,18 @@ def initialize_database():
         last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
     """
+    # Add index on lowercased display_name for case-insensitive search
+    create_name_index_sql = """
+    CREATE INDEX IF NOT EXISTS idx_players_display_name_lower
+    ON players (LOWER(display_name));
+    """
     try:
         with conn.cursor() as cur:
             cur.execute(create_players_sql)
             cur.execute(create_perf_sql)
+            cur.execute(create_name_index_sql) # <<< Add index creation
         conn.commit()
-        logger.info("Schema checked/created successfully (players, location_performance).")
+        logger.info("Schema checked/created successfully (players, location_performance, indexes).") # Updated log
     except psycopg2.DatabaseError as e:
         logger.error(f"Error initializing database tables: {e}", exc_info=True)
         conn.rollback()
@@ -1030,6 +1036,24 @@ def get_cash_leaderboard_data(limit: int = 10) -> list[tuple[int, str | None, fl
 
     return results
 
+# --- Helper to get display name by ID ---
+def find_display_name_by_id(user_id: int) -> str | None:
+     """Fetches just the display name for a given user ID."""
+     conn = get_db_connection()
+     if not conn: return None
+     sql = "SELECT display_name FROM players WHERE user_id = %s;"
+     name = None
+     try:
+         with conn.cursor() as cur:
+             cur.execute(sql, (user_id,))
+             result = cur.fetchone()
+             if result:
+                 name = result[0]
+     except Exception as e:
+          logger.error(f"Error fetching display name for {user_id}: {e}")
+          # conn.rollback() # Read-only query, rollback might not be needed
+     return name
+
 # --- New Location Performance Functions ---
 def get_current_performance_multiplier(location_name: str) -> float:
     """Gets the current performance multiplier for a location from the DB."""
@@ -1132,3 +1156,27 @@ def apply_shop_shutdown(target_user_id: int, shop_location: str, duration_second
     save_player_data(target_user_id, player_data)
     logger.info(f"Shutdown applied successfully for {target_user_id}'s {shop_location} until {shutdown_end_time}")
     return True
+
+# --- New function to find user by display name ---
+def find_user_by_display_name(display_name: str) -> list[int]:
+    """Finds user IDs by display name (case-insensitive)."""
+    logger.debug(f"Searching for user ID by display name: {display_name}")
+    conn = get_db_connection()
+    if not conn: return []
+
+    # Use LOWER() for case-insensitive comparison
+    sql = "SELECT user_id FROM players WHERE LOWER(display_name) = LOWER(%s);"
+    user_ids = []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (display_name,))
+            results = cur.fetchall()
+            user_ids = [row[0] for row in results]
+        logger.debug(f"Found {len(user_ids)} match(es) for display name '{display_name}'.")
+    except psycopg2.DatabaseError as e:
+        logger.error(f"DB error finding user by display name '{display_name}': {e}", exc_info=True)
+        conn.rollback()
+    except Exception as e:
+        logger.error(f"Unexpected error finding user by display name '{display_name}': {e}", exc_info=True)
+
+    return user_ids
