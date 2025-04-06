@@ -626,7 +626,7 @@ def expand_shop(user_id: int, expansion_name: str) -> tuple[bool, str, list[str]
         if req_type == "level": req_msg = f"Requires {INITIAL_SHOP_NAME} Lvl {req_value}."
         elif req_type == "shop_level": req_msg = f"Requires {req_value} Lvl {req_data[2]}."
         elif req_type == "total_income": req_msg = f"Requires ${req_value:,.2f} total income earned."
-        elif req_type == "shops_count": req_msg = f"Requires {req_value} total shops (you have {len(player_data.get("shops", {}))})."
+        elif req_type == "shops_count": req_msg = f"Requires {req_value} total shops (you have {len(player_data.get('shops', {}))})."
         elif req_type == "has_shop": req_msg = f"Requires owning a shop in {req_value}."
 
         return False, f"Can't expand to {expansion_name} yet. {req_msg}", []
