@@ -998,6 +998,7 @@ SABOTAGE_COOLDOWN_SECONDS = 900
 
 async def sabotage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Starts the sabotage process by showing potential targets."""
+    logger.info("--- sabotage_command ENTERED ---") # <<< Add entry log
     user = update.effective_user
     if not user:
         await update.message.reply_text("Need user info to start sabotage.")
