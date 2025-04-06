@@ -2,5 +2,5 @@
 
 A Telegram game where players battle with pizzas!
 
-<!-- Trigger rebuild -->
+<!-- Trigger rebuild again -->
 
