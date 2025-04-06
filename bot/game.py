@@ -799,9 +799,9 @@ def update_challenge_progress(player_data: dict, updated_metrics: list[str]) -> 
     # No need to save here, the calling function (collect, upgrade) will save.
     return completed_messages
 
-# --- Status Formatting ---
-
-def format_status(player_data: dict) -> str:
+# --- Status Formatting (with sorting) ---
+def format_status(player_data: dict, sort_by: str = 'name') -> str:
+    """Formats the player's status, allowing sorting of the shop list."""
     user_id = player_data.get("user_id", "Unknown")
     cash = player_data.get("cash", 0)
     pizza_coins = player_data.get("pizza_coins", 0)
@@ -811,10 +811,12 @@ def format_status(player_data: dict) -> str:
     title = player_data.get("current_title", None)
     achievements_unlocked = len(player_data.get("unlocked_achievements", []))
 
-    title_str = f" Title: &lt;{title}&gt;" if title else ""
+    header = f"<b>--- {franchise_name or 'Your Pizza Empire'} ---</b>"
+    if title:
+        header += f"\n<i>Title: &lt;{title}&gt;</i>"
 
     status_lines = [
-        f"<b>--- {franchise_name or 'Your Pizza Empire'} ---</b>",
+        header,
         f"(Player ID: {user_id})",
         f"<b>Cash:</b> ${cash:,.2f}",
         f"<b>Pizza Coins:</b> {pizza_coins:,} 🍕",
@@ -822,58 +824,90 @@ def format_status(player_data: dict) -> str:
         f"<b>Achievements Unlocked:</b> {achievements_unlocked}",
         "<b>Shops:</b>"
     ]
+
     if not shops:
         status_lines.append("  None yet! Use /start")
     else:
-        for name, data in sorted(shops.items()):
+        # --- Sorting Logic --- #
+        shop_list_to_sort = []
+        for name, data in shops.items():
             level = data.get("level", 1)
             custom_name = data.get("custom_name", name)
             upgrade_cost = get_upgrade_cost(level, name)
             current_perf = get_current_performance_multiplier(name)
+            shop_list_to_sort.append({
+                'location': name,
+                'level': level,
+                'custom_name': custom_name,
+                'upgrade_cost': upgrade_cost,
+                'performance': current_perf
+            })
+
+        valid_sort_keys = ['name', 'level', 'cost']
+        sort_key_internal = 'location' # Default db key
+        reverse_sort = False
+
+        sort_param = sort_by.lower()
+        if sort_param == 'level':
+            sort_key_internal = 'level'
+            reverse_sort = True # Highest level first
+        elif sort_param == 'upgrade_cost' or sort_param == 'cost':
+            sort_key_internal = 'upgrade_cost'
+            # Default: Lowest cost first (reverse=False)
+        # else default sort by name/location (reverse=False)
+
+        logger.debug(f"Sorting shops by '{sort_key_internal}', reverse={reverse_sort}")
+        try:
+            sorted_shops = sorted(shop_list_to_sort, key=lambda item: item[sort_key_internal], reverse=reverse_sort)
+        except KeyError:
+             logger.warning(f"Invalid sort key '{sort_key_internal}', defaulting to name sort.")
+             sorted_shops = sorted(shop_list_to_sort, key=lambda item: item['location'])
+        # --- End Sorting Logic --- #
+
+        # Iterate through sorted list
+        for shop_info in sorted_shops:
+            name = shop_info['location']
+            level = shop_info['level']
+            custom_name = shop_info['custom_name']
+            upgrade_cost = shop_info['upgrade_cost']
+            current_perf = shop_info['performance']
             perf_emoji = "📈" if current_perf > 1.1 else "📉" if current_perf < 0.9 else "🤷‍♂️"
             display_shop_name = f"{custom_name} ({name})" if custom_name != name else name
             status_lines.append(f"  - {perf_emoji} <b>{display_shop_name}:</b> Level {level} (Upgrade Cost: ${upgrade_cost:,.2f})")
 
     income_rate = calculate_income_rate(shops)
     status_lines.append(f"<b>Current Income Rate:</b> ${income_rate:.2f}/sec")
-
     uncollected_income = calculate_uncollected_income(player_data)
     status_lines.append(f"<b>Uncollected Income:</b> ${uncollected_income:.2f} (Use /collect)")
-
     available_expansions = get_available_expansions(player_data)
     status_lines.append("<b>Available Expansions:</b>")
     if available_expansions:
+        exp_list_formatted = []
         for loc in available_expansions:
             req_data = EXPANSION_LOCATIONS[loc]
             req_type = req_data[0]
             req_value = req_data[1]
-            # gdp_factor = req_data[2] # Base GDP not shown here anymore, just current perf
+            gdp_factor = req_data[2]
             cost_scale = req_data[3]
             expansion_cost = get_expansion_cost(loc)
             current_perf = get_current_performance_multiplier(loc)
             perf_emoji = "📈" if current_perf > 1.1 else "📉" if current_perf < 0.9 else "🤷‍♂️"
-
-            # Display requirement based on type
             if req_type == "level": req_str = f"(Req: {INITIAL_SHOP_NAME} Lvl {req_value})"
-            elif req_type == "shop_level": req_str = f"(Req: {req_value} Lvl {req_data[2]})" # Use 3rd element for level
+            elif req_type == "shop_level": req_str = f"(Req: {req_value} Lvl {req_data[2]})"
             elif req_type == "total_income": req_str = f"(Req: Total Earned ${req_value:,.2f})"
             elif req_type == "shops_count": req_str = f"(Req: {req_value} Shops)"
             elif req_type == "has_shop": req_str = f"(Req: Own {req_value})"
             else: req_str = "(Unknown Req)"
-
-            # Show Current Performance instead of Base GDP
-            status_lines.append(f"  - {loc} {perf_emoji}x{current_perf:.1f} - Cost: ${expansion_cost:,.2f} {req_str} - Use /expand {loc.lower()}")
+            exp_list_formatted.append(f"  - {loc} {perf_emoji}x{current_perf:.1f} - Cost: ${expansion_cost:,.2f} {req_str} - Use /expand {loc.lower()}")
+        status_lines.extend(sorted(exp_list_formatted)) # Sort expansions alphabetically
     else:
         status_lines.append("  None available right now. Keep upgrading!")
-
-    # Display Challenges
     status_lines.append("<b>Active Challenges:</b> (/challenges for details)")
     for timescale, challenge in player_data.get("active_challenges", {}).items():
         if challenge:
             status_lines.append(f"  - {timescale.capitalize()}: {challenge['description']}")
         else:
             status_lines.append(f"  - {timescale.capitalize()}: None active")
-
     status_lines.append("\n<i>Use Pizza Coins 🍕 to speed things up! (Coming Soon)</i>")
     return "\n".join(status_lines)
 
