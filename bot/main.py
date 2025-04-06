@@ -8,7 +8,7 @@ import html # For escaping
 from datetime import time as dt_time, timedelta, datetime, timezone
 
 # Telegram Core Types
-from telegram import Update, LabeledPrice, ShippingOption, Invoice, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, LabeledPrice, ShippingOption, Invoice, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 # Telegram Constants & Filters
 from telegram.constants import ChatAction # Maybe useful later?
 # Telegram Extensions
@@ -142,57 +142,117 @@ async def update_player_display_name(user_id: int, user: "telegram.User | None")
     if user:
         game.update_display_name(user_id, user)
 
-# --- Scheduled Job Functions ---
-async def generate_daily_challenges_job(context: ContextTypes.DEFAULT_TYPE):
-    """Scheduled job to generate daily challenges for all players in DB."""
-    logger.info("Running daily challenge generation job...")
+# --- NEW Helper to show upgrade options ---
+async def _show_upgrade_options(update_or_query: Update | CallbackQuery, context: ContextTypes.DEFAULT_TYPE):
+    """Fetches player shops and displays them as buttons for upgrading."""
+    user = update_or_query.from_user
+    chat_id = update_or_query.message.chat_id if hasattr(update_or_query, 'message') else None
+    if not chat_id and hasattr(update_or_query, 'chat_instance'): # Fallback for query without message?
+        chat_id = user.id # DM
+    if not chat_id:
+         logger.warning("_show_upgrade_options could not determine chat_id")
+         return
+
+    logger.debug(f"Showing upgrade options for user {user.id}")
+    player_data = game.load_player_data(user.id)
+    shops = player_data.get("shops", {})
+
+    if not shops:
+         await context.bot.send_message(chat_id=chat_id, text="You ain't got no shops to upgrade yet!")
+         return
+
+    keyboard = []
+    shop_list = sorted(shops.items(), key=lambda item: game.get_upgrade_cost(item[1].get('level', 1), item[0])) # Sort by current upgrade cost asc
+
+    for location, shop_data in shop_list:
+        level = shop_data.get("level", 1)
+        cost = game.get_upgrade_cost(level, location)
+        custom_name = shop_data.get("custom_name", location)
+        display_name = f"{custom_name} ({location})" if custom_name != location else location
+        # Button shows Shop Name (Lvl X) - Cost $Y
+        button_text = f"{display_name} (Lvl {level}) - ${cost:,.0f}"
+        # Callback data format: upgrade_shop_{location_name}
+        callback_data = f"upgrade_shop_{location}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+        # One button per row
+
+    if not keyboard:
+        await context.bot.send_message(chat_id=chat_id, text="No shops available to upgrade right now.") # Should not happen if shops exist
+        return
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    # If called from a CallbackQuery, edit the message, otherwise send new
+    if isinstance(update_or_query, CallbackQuery):
+        try:
+             await update_or_query.edit_message_text("🤌 Which shop needs some love (and cash)?", reply_markup=reply_markup)
+        except Exception as e:
+            logger.error(f"Failed to edit message for upgrade options: {e}")
+            # Fallback: Send new message if edit fails
+            await context.bot.send_message(chat_id=chat_id, text="🤌 Which shop needs some love (and cash)?", reply_markup=reply_markup)
+    else: # Called from /upgrade command
+        await context.bot.send_message(chat_id=chat_id, text="🤌 Which shop needs some love (and cash)?", reply_markup=reply_markup)
+
+
+# --- NEW Helper to process upgrade attempt ---
+async def _process_upgrade(context: ContextTypes.DEFAULT_TYPE, user_id: int, shop_location: str, query: CallbackQuery | None = None):
+    """Handles the core logic of attempting an upgrade."""
+    logger.info(f"Processing upgrade attempt for user {user_id}, shop '{shop_location}'")
     try:
-        user_ids = game.get_all_user_ids() # <<< Use DB function
-        if not user_ids:
-            logger.info("No players found in database for daily challenge generation.")
-            return
+        # Need attacker data for display name fallback on failure message
+        attacker_data = game.load_player_data(user_id)
+        shops = attacker_data.get("shops", {})
+        if shop_location not in shops:
+             # This check might be redundant if called from button, but good safety
+             raise ValueError(f"Shop {shop_location} not found for user {user_id}")
 
-        generated_count = 0
-        for user_id in user_ids:
-            try:
-                # Optional: Add activity check here if desired
-                game.generate_new_challenges(user_id, 'daily')
-                generated_count += 1
-                # Optional: Notify user (consider rate limiting if many users)
-            except Exception as e:
-                logger.error(f"Error generating daily challenge for user {user_id}: {e}", exc_info=True)
-        logger.info(f"Daily challenge generation complete. Processed for {generated_count}/{len(user_ids)} users.")
+        current_level = shops[shop_location].get("level", 1)
+        success, result_data, completed_challenges = game.upgrade_shop(user.id, shop_location)
+
+        outcome_message = ""
+        if success:
+            new_level = result_data
+            fun_messages = [
+                f"🍾 Hot dang! Your {shop_location} spot just hit Level {new_level}. Lines around the block incoming!",
+                f"🤌 Mama mia! {shop_location} is now Level {new_level}! More dough, less problems!",
+                f"🎉 Level {new_level} for {shop_location}! You're cookin' with gas now!"
+            ]
+            outcome_message = random.choice(fun_messages)
+        else:
+            failure_message = result_data
+            if "Not enough cash" in failure_message:
+                 outcome_message = failure_message
+            else:
+                 cost_lost_str = "the cost"
+                 try: cost_lost_str = failure_message.split("lost ")[-1].split(" in")[0]
+                 except IndexError: logger.warning(f"Could not parse cost from failure message: {failure_message}")
+                 failure_messages = [
+                      f"💥 KABOOM! Contractors messed up! Upgrade failed, {cost_lost_str} went up in smoke!",
+                      f"😱 Mamma Mia! Sinkhole swallowed the crew! Upgrade failed, dough gone ({cost_lost_str})!",
+                      f"📉 Bad investment! {shop_location} upgrade flopped. Lost {cost_lost_str}!",
+                      f"🔥 Grease fire! Upgrade went belly-up. Kiss {cost_lost_str} goodbye!"
+                 ]
+                 outcome_message = random.choice(failure_messages)
+
+        # Send result: Edit message if from callback, else send new
+        if query:
+            await query.edit_message_text(text=outcome_message, parse_mode="HTML")
+        else:
+             await context.bot.send_message(chat_id=user_id, text=outcome_message, parse_mode="HTML")
+
+        # Post-action checks
+        if success:
+            await send_challenge_notifications(user_id, completed_challenges, context)
+            await check_and_notify_achievements(user_id, context)
+
     except Exception as e:
-        logger.error(f"Failed to fetch user IDs for daily challenge job: {e}", exc_info=True)
+        logger.error(f"Error during _process_upgrade for {user_id}, shop {shop_location}: {e}", exc_info=True)
+        error_msg = "Ay caramba! Somethin' went wrong with the upgrade."
+        if query:
+             try: await query.edit_message_text(text=error_msg)
+             except Exception: await context.bot.send_message(chat_id=user_id, text=error_msg)
+        else:
+             await context.bot.send_message(chat_id=user_id, text=error_msg)
 
-async def generate_weekly_challenges_job(context: ContextTypes.DEFAULT_TYPE):
-    """Scheduled job to generate weekly challenges for all players in DB."""
-    logger.info("Running weekly challenge generation job...")
-    try:
-        user_ids = game.get_all_user_ids() # <<< Use DB function
-        if not user_ids:
-            logger.info("No players found in database for weekly challenge generation.")
-            return
-
-        generated_count = 0
-        for user_id in user_ids:
-            try:
-                game.generate_new_challenges(user_id, 'weekly')
-                generated_count += 1
-                # Optional: Notify user
-            except Exception as e:
-                logger.error(f"Error generating weekly challenge for user {user_id}: {e}", exc_info=True)
-        logger.info(f"Weekly challenge generation complete. Processed for {generated_count}/{len(user_ids)} users.")
-    except Exception as e:
-        logger.error(f"Failed to fetch user IDs for weekly challenge job: {e}", exc_info=True)
-
-async def update_location_performance_job(context: ContextTypes.DEFAULT_TYPE):
-    """Scheduled job to update location performance multipliers."""
-    logger.info("Running location performance update job...")
-    try:
-        game.update_location_performance()
-    except Exception as e:
-        logger.error(f"Error in update_location_performance_job: {e}", exc_info=True)
 
 # --- Command Handlers ---
 
@@ -410,90 +470,32 @@ async def collect_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("Bada bing! Somethin' went wrong collectin' the dough.")
 
 async def upgrade_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles /upgrade. Shows options if no args, processes if args."""
     user = update.effective_user
     if not user:
          await update.message.reply_text("Can't upgrade if I don't know who you are!")
          return
-    await update_player_display_name(user.id, user) # <-- Update name on upgrade
-    player_data = game.load_player_data(user.id)
-    shops = player_data.get("shops", {})
+    await update_player_display_name(user.id, user)
 
-    # --- "Talkin' Dough" Clarity --- #
     if not context.args:
-        if not shops:
-             await update.message.reply_text("You ain't got no shops to upgrade yet, boss! Get started!")
-             return
-
-        lines = ["🤌 Hey Pizza Maestro, thinkin' 'bout upgrades? Here's what's cookin':\n"]
-        for shop_name, shop_data in shops.items():
-            current_level = shop_data.get("level", 1)
-            next_level = current_level + 1
-            upgrade_cost = game.get_upgrade_cost(current_level, shop_name)
-            # Use get_shop_income_rate which now includes GDP factor
-            current_rate_hr = game.get_shop_income_rate(shop_name, current_level) * 3600
-            next_rate_hr = game.get_shop_income_rate(shop_name, next_level) * 3600
-            # Adjusted message to reflect potential cost differences
-            lines.append(f"- <b>{shop_name}</b> (Level {current_level} → {next_level}): Costs ${upgrade_cost:,.2f}, improves income! (${current_rate_hr:,.2f}/hr → ${next_rate_hr:,.2f}/hr)")
-            lines.append(f"  Type /upgrade {shop_name.lower()} to make it happen!")
-
-        await update.message.reply_html("\n".join(lines))
+        # No args - show options with buttons
+        await _show_upgrade_options(update, context)
         return
-
-    # --- Process Specific Upgrade Request --- #
-    shop_name_arg = " ".join(context.args).strip()
-    # Find the shop matching the argument (case-insensitive)
-    target_shop_name = None
-    for name in shops.keys():
-        if name.lower() == shop_name_arg.lower():
-            target_shop_name = name
-            break
-
-    if not target_shop_name:
-        await update.message.reply_text(f"Whaddya talkin' about? You don't own a shop called '{shop_name_arg}'. Check ya /status.")
-        return
-
-    logger.info(f"User {user.id} attempting to upgrade '{target_shop_name}'.")
-
-    try:
-        # upgrade_shop now returns (success, message_or_new_level_str, completed_challenges)
-        success, result_data, completed_challenges = game.upgrade_shop(user.id, target_shop_name)
-
-        if success:
-            # --- Cheeky SUCCESS Feedback --- #
-            new_level = result_data # On success, result_data is the new level string
-            fun_messages = [
-                f"🍾 Hot dang! Your {target_shop_name} spot just hit Level {new_level}. Lines around the block incoming!",
-                f"🤌 Mama mia! {target_shop_name} is now Level {new_level}! More dough, less problems!",
-                f"🎉 Level {new_level} for {target_shop_name}! You're cookin' with gas now!"
-            ]
-            await update.message.reply_html(random.choice(fun_messages))
-            await send_challenge_notifications(user.id, completed_challenges, context)
-            await check_and_notify_achievements(user.id, context)
-        else:
-            # --- Handle FAILURE --- #
-            failure_message = result_data # On failure, result_data is the message from game.py
-            if "Not enough cash" in failure_message:
-                 await update.message.reply_html(failure_message) # Send the standard insufficient funds message
-            else:
-                 # It was a random failure, use dramatic messages
-                 # Extract cost from the specific failure message format
-                 cost_lost_str = "the cost" # Default fallback
-                 try:
-                      cost_lost_str = failure_message.split("lost ")[-1].split(" in")[0]
-                 except IndexError:
-                      logger.warning(f"Could not parse cost from failure message: {failure_message}")
-
-                 failure_messages = [
-                      f"💥 KABOOM! The contractors messed up! The upgrade failed and {cost_lost_str} went up in smoke!",
-                      f"😱 Mamma Mia! A sinkhole swallowed the construction crew! Upgrade failed, dough is gone ({cost_lost_str})!",
-                      f"📉 Bad investment, boss! The upgrade for {target_shop_name} flopped harder than a soggy pizza base. Lost {cost_lost_str}!",
-                      f"🔥 Grease fire! The whole upgrade went belly-up. Kiss {cost_lost_str} goodbye!"
-                 ]
-                 await update.message.reply_html(random.choice(failure_messages))
-
-    except Exception as e:
-        logger.error(f"Error during upgrade_command for {user.id}, shop {target_shop_name}: {e}", exc_info=True)
-        await update.message.reply_text("Ay caramba! Somethin' went wrong with the upgrade.")
+    else:
+        # Args provided - attempt direct upgrade
+        shop_name_arg = " ".join(context.args).strip()
+        player_data = game.load_player_data(user.id)
+        shops = player_data.get("shops", {})
+        target_shop_name = None
+        for name in shops.keys():
+            if name.lower() == shop_name_arg.lower():
+                target_shop_name = name
+                break
+        if not target_shop_name:
+            await update.message.reply_text(f"Whaddya talkin' about? You don't own '{shop_name_arg}'. Check /status or use /upgrade first.")
+            return
+        # Call the processing helper (pass update=None as it's not from a callback)
+        await _process_upgrade(context, user.id, target_shop_name, query=None)
 
 async def expand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -742,7 +744,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/renameshop [loc] [name] - Rename a specific shop (e.g., `/renameshop Brooklyn Luigi's`).\n"
         "/status [s:key] - Check status. Optionally sort shops by `s:name`, `s:level`, or `s:cost` (e.g., `/status s:cost`).\n"
         "/collect - Scoop up the cash your shops have earned!\n"
-        "/upgrade [shop] - List upgrade options or upgrade a specific shop.\n"
+        "/upgrade - Show available shop upgrades (or use `/upgrade [shop]` directly).\n"
         "/expand [location] - List expansion options (with costs!) or expand to a new location.\n\n"
         "<b>Progression & Fun:</b>\n"
         "/challenges - View your current daily and weekly challenges.\n"
@@ -1163,53 +1165,27 @@ async def sabotage_choice_callback(update: Update, context: ContextTypes.DEFAULT
         reply_markup=reply_markup
     )
 
-# --- New Sabotage Shop Choice Callback Handler --- #
-async def sabotage_shop_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles the button press selecting the specific shop to sabotage."""
+# --- NEW Callback Handler for Upgrade Shop Buttons --- #
+async def upgrade_shop_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles the button press selecting the specific shop to upgrade."""
     query = update.callback_query
-    user = query.from_user # This is the ATTACKER
-    logger.info(f"--- sabotage_shop_choice_callback ENTERED by user {user.id} ---")
+    user = query.from_user
+    logger.info(f"--- upgrade_shop_choice_callback ENTERED by user {user.id} ---")
     await query.answer()
 
-    # Extract target user id and shop location from callback data
     try:
-        # Format: sabo_shop_{target_user_id}_{location_name}
-        parts = query.data.split('_')
-        target_user_id = int(parts[2])
-        shop_location = parts[3]
-        # Re-join if location name had underscores (though unlikely with current names)
-        if len(parts) > 4:
-             shop_location = "_".join(parts[3:])
-        logger.info(f"Parsed target_user_id: {target_user_id}, shop_location: {shop_location}")
-
-    except (IndexError, ValueError):
-        logger.warning(f"Invalid sabotage shop choice callback data: {query.data}")
+        # Format: upgrade_shop_{location_name}
+        shop_location = query.data.split("upgrade_shop_", 1)[1]
+        logger.info(f"Parsed shop_location: {shop_location} for user {user.id}")
+    except IndexError:
+        logger.warning(f"Invalid upgrade shop choice callback data: {query.data}")
         await query.edit_message_text("Invalid shop choice.")
         return
 
-    attacker_user_id = user.id
+    # Call the processing helper, passing the query object
+    await _process_upgrade(context, user.id, shop_location, query=query)
 
-    # Check cooldown (important here before processing)
-    attacker_data = game.load_player_data(attacker_user_id)
-    if not attacker_data:
-        await query.edit_message_text("Error loading your data.")
-        return
-    now = time.time()
-    last_attempt_time = attacker_data.get("last_sabotage_attempt_time", 0.0)
-    time_since_last = now - last_attempt_time
-    if time_since_last < game.SABOTAGE_COOLDOWN_SECONDS:
-         remaining_cooldown = timedelta(seconds=int(game.SABOTAGE_COOLDOWN_SECONDS - time_since_last))
-         await query.edit_message_text(f"Your agents are still laying low! Sabotage available again in {str(remaining_cooldown).split('.')[0]}.")
-         return
-
-    target_name = game.find_display_name_by_id(target_user_id) or f"Player {target_user_id}"
-    await query.edit_message_text(f"Sending agent to hit {shop_location} at {target_name}'s place... Fingers crossed!")
-    logger.info(f"User {attacker_user_id} confirmed sabotage attempt against {target_user_id}'s shop: {shop_location}")
-
-    # Call the processing helper with the chosen shop
-    await _process_sabotage(context, attacker_user_id, target_user_id, shop_location)
-
-# --- Main Menu Callback Handler (Performs Actions) --- #
+# --- Main Menu Callback Handler (Updated for Upgrade) --- #
 async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles button presses from the main action keyboard, performs the action."""
     query = update.callback_query
@@ -1222,22 +1198,14 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         await query.answer()
         logger.info(f"Callback query answered for main_menu action {action}, user {user.id}.")
-    except Exception as e:
-        logger.error(f"ERROR answering callback query for main_menu: {e}", exc_info=True)
-        return # Can't proceed
+    except Exception as e: logger.error(f"ERROR answering callback query for main_menu: {e}", exc_info=True); return
 
-    # Remove keyboard from original status message first
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-        logger.debug(f"Original status keyboard removed for action {action}.")
-    except Exception as e:
-        # Log warning but continue if possible
-        logger.warning(f"Failed to remove original status keyboard: {e}")
+    # Remove keyboard first
+    try: await query.edit_message_reply_markup(reply_markup=None); logger.debug(f"Original status keyboard removed.")
+    except Exception as e: logger.warning(f"Failed to remove original status keyboard: {e}")
 
-    # --- Perform Action based on Callback Data --- #
     try:
         await update_player_display_name(user.id, user)
-
         if action == "main_collect":
             logger.debug(f"Handling main_collect action for {user.id}")
             # Replicate collect_command logic
@@ -1269,23 +1237,8 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await context.bot.send_message(chat_id=chat_id, text="Nothin' to collect, boss. Ovens are cold!")
 
         elif action == "main_upgrade":
-            logger.debug(f"Handling main_upgrade action for {user.id}")
-            # Replicate upgrade_command logic (no args case)
-            player_data = game.load_player_data(user.id)
-            shops = player_data.get("shops", {})
-            if not shops:
-                 await context.bot.send_message(chat_id=chat_id, text="You ain't got no shops to upgrade yet!")
-            else:
-                lines = ["🤌 Thinkin' 'bout upgrades? Here's what's cookin':\n"]
-                for shop_name, shop_data in shops.items():
-                     current_level = shop_data.get("level", 1)
-                     next_level = current_level + 1
-                     upgrade_cost = game.get_upgrade_cost(current_level, shop_name)
-                     current_rate_hr = game.get_shop_income_rate(shop_name, current_level) * 3600
-                     next_rate_hr = game.get_shop_income_rate(shop_name, next_level) * 3600
-                     lines.append(f"- <b>{shop_name}</b> Lvl {current_level}→{next_level}: ${upgrade_cost:,.2f} (${current_rate_hr:,.2f}/hr → ${next_rate_hr:,.2f}/hr)")
-                     lines.append(f"  `/upgrade {shop_name.lower()}`")
-                await context.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
+            logger.debug(f"Handling main_upgrade action for {user.id} - showing options")
+            await _show_upgrade_options(query, context) # <<< Call helper to show buttons
 
         elif action == "main_expand":
             logger.debug(f"Handling main_expand action for {user.id}")
@@ -1370,6 +1323,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(expansion_choice_callback, pattern="^expand_"))
     application.add_handler(CallbackQueryHandler(sabotage_choice_callback, pattern="^sabotage_"))
     application.add_handler(CallbackQueryHandler(sabotage_shop_choice_callback, pattern="^sabo_shop_"))
+    application.add_handler(CallbackQueryHandler(upgrade_shop_choice_callback, pattern="^upgrade_shop_"))
     application.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_.*"))
 
     # Schedule challenge generation jobs
