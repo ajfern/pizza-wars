@@ -223,6 +223,7 @@ def load_player_data(user_id: int) -> dict | None:
                     # Ensure level and time exist too for consistency
                     shop_data.setdefault("level", 1)
                     shop_data.setdefault("last_collected_time", time.time())
+                    shop_data.setdefault("shutdown_until", None) # <<< Add default
             # --- End Migration --- #
             return player_data
         else:
@@ -279,6 +280,7 @@ def save_player_data(user_id: int, data: dict) -> None:
             shop_data.setdefault("custom_name", loc)
             shop_data.setdefault("level", 1)
             shop_data.setdefault("last_collected_time", time.time())
+            shop_data.setdefault("shutdown_until", None) # <<< Add default
 
     sql = """
     INSERT INTO players (
@@ -372,7 +374,8 @@ def get_default_player_state(user_id: int) -> dict:
             INITIAL_SHOP_NAME: {
                 "custom_name": INITIAL_SHOP_NAME,
                 "level": 1,
-                "last_collected_time": time.time()
+                "last_collected_time": time.time(),
+                "shutdown_until": None # <<< Add default
             }
         },
         "unlocked_achievements": [],
@@ -419,10 +422,29 @@ def calculate_uncollected_income(player_data: dict) -> float:
     for name, shop_data in shops.items():
         level = shop_data.get("level", 1)
         last_collected = shop_data.get("last_collected_time", current_time)
-        time_diff = max(0, current_time - last_collected)
-        # Use helper function for rate
-        shop_rate = get_shop_income_rate(name, level)
-        total_uncollected += shop_rate * time_diff
+        shutdown_until = shop_data.get("shutdown_until") # Get shutdown time
+
+        # Determine the effective start time for calculation for this period
+        effective_start_time = last_collected
+        if shutdown_until and shutdown_until > last_collected:
+            # If shutdown ended after last collection, start earning from shutdown end
+            effective_start_time = max(last_collected, shutdown_until)
+
+        # Determine the effective end time for calculation for this period
+        effective_end_time = current_time
+        if shutdown_until and shutdown_until > effective_start_time:
+            # If still shut down, or shut down started within this period,
+            # cap earning time at the shutdown start time.
+            effective_end_time = min(current_time, shutdown_until)
+
+        # Calculate the duration the shop was actually active
+        active_duration = max(0, effective_end_time - effective_start_time)
+
+        if active_duration > 0:
+            shop_rate = get_shop_income_rate(name, level)
+            total_uncollected += shop_rate * active_duration
+        # else: logger.debug(f"Shop {name} generated 0 income (active_duration: {active_duration})")
+
     return total_uncollected
 
 def collect_income(user_id: int) -> tuple[float, list[str], bool, float | None]:
@@ -867,13 +889,22 @@ def format_status(player_data: dict, sort_by: str = 'name') -> str:
         # Iterate through sorted list
         for shop_info in sorted_shops:
             name = shop_info['location']
+            shop_data_dict = shops.get(name, {}) # Get the full data dict
             level = shop_info['level']
             custom_name = shop_info['custom_name']
             upgrade_cost = shop_info['upgrade_cost']
             current_perf = shop_info['performance']
             perf_emoji = "📈" if current_perf > 1.1 else "📉" if current_perf < 0.9 else "🤷‍♂️"
             display_shop_name = f"{custom_name} ({name})" if custom_name != name else name
-            status_lines.append(f"  - {perf_emoji} <b>{display_shop_name}:</b> Level {level} (Upgrade Cost: ${upgrade_cost:,.2f})")
+
+            # Check for shutdown
+            shutdown_str = ""
+            shutdown_until = shop_data_dict.get("shutdown_until")
+            if shutdown_until and shutdown_until > time.time():
+                 time_left = timedelta(seconds=int(shutdown_until - time.time()))
+                 shutdown_str = f" 🚫(Closed: {str(time_left).split('.')[0]})"
+
+            status_lines.append(f"  - {perf_emoji} <b>{display_shop_name}:</b> Level {level} (Upgrade Cost: ${upgrade_cost:,.2f}){shutdown_str}")
 
     income_rate = calculate_income_rate(shops)
     status_lines.append(f"<b>Current Income Rate:</b> ${income_rate:.2f}/sec")
@@ -1060,3 +1091,44 @@ def update_location_performance():
         conn.rollback()
     except Exception as e:
         logger.error(f"Unexpected error updating location performance: {e}", exc_info=True)
+
+# --- New Sabotage Helper Functions ---
+def get_top_earning_shop(shops: dict) -> str | None:
+    """Finds the location name of the highest-earning shop."""
+    top_shop = None
+    max_rate = -1
+
+    if not shops:
+        return None
+
+    for name, data in shops.items():
+        level = data.get("level", 1)
+        # Calculate potential rate (ignoring current performance/shutdown for targeting)
+        gdp_factor = 1.0
+        if name != INITIAL_SHOP_NAME and name in EXPANSION_LOCATIONS:
+            if len(EXPANSION_LOCATIONS[name]) > 2: gdp_factor = EXPANSION_LOCATIONS[name][2]
+        potential_rate = (BASE_INCOME_PER_SECOND * level * gdp_factor)
+
+        if potential_rate > max_rate:
+            max_rate = potential_rate
+            top_shop = name
+
+    # If only the initial shop exists, target that
+    if top_shop is None and INITIAL_SHOP_NAME in shops:
+        return INITIAL_SHOP_NAME
+
+    return top_shop
+
+def apply_shop_shutdown(target_user_id: int, shop_location: str, duration_seconds: int):
+    """Applies a shutdown timer to a specific shop for a target user."""
+    logger.info(f"Applying shutdown to {shop_location} for user {target_user_id} for {duration_seconds}s")
+    player_data = load_player_data(target_user_id)
+    if not player_data or shop_location not in player_data.get("shops", {}):
+        logger.warning(f"Cannot apply shutdown: Player {target_user_id} or shop {shop_location} not found.")
+        return False
+
+    shutdown_end_time = time.time() + duration_seconds
+    player_data["shops"][shop_location]["shutdown_until"] = shutdown_end_time
+    save_player_data(target_user_id, player_data)
+    logger.info(f"Shutdown applied successfully for {target_user_id}'s {shop_location} until {shutdown_end_time}")
+    return True

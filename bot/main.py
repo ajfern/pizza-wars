@@ -690,6 +690,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/buycoins - View options to purchase Pizza Coins 🍕 (premium currency).\n"
         # Add /boost here if/when implemented
         "/help - Show this command guide.\n\n"
+        "<b>PvP Actions:</b>\n"
+        "/sabotage [user_id] - Send an agent to disrupt a rival's top shop (Risky!).\n\n"
         "<i>Now get back to building that empire!</i>"
     )
     await update.message.reply_html(help_text)
@@ -982,6 +984,124 @@ async def renameshop_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.error(f"Error renaming shop for {user.id}: {e}", exc_info=True)
         await update.message.reply_text("Couldn't save the new shop name right now. Try again.")
 
+# --- Sabotage Command --- #
+SABOTAGE_BASE_COST = 500
+SABOTAGE_PCT_COST = 0.02 # 2% of current cash
+SABOTAGE_SUCCESS_CHANCE = 0.60 # 60% success
+SABOTAGE_DURATION_SECONDS = 3600 # 1 hour
+
+async def sabotage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Attempts to sabotage another player's top shop."""
+    user = update.effective_user
+    if not user:
+        await update.message.reply_text("Who are you trying to sabotage as? Need user info.")
+        return
+    await update_player_display_name(user.id, user)
+
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("Usage: /sabotage [target_user_id]")
+        return
+
+    target_user_id = int(context.args[0])
+    attacker_user_id = user.id
+
+    if target_user_id == attacker_user_id:
+        await update.message.reply_text("Sabotage yourself? Bit counter-productive, eh?")
+        return
+
+    logger.info(f"User {attacker_user_id} attempting to sabotage user {target_user_id}")
+
+    # --- Load Attacker Data & Check Cost --- #
+    attacker_data = game.load_player_data(attacker_user_id)
+    if not attacker_data:
+        await update.message.reply_text("Couldn't load your data to initiate sabotage.")
+        return
+
+    attacker_cash = attacker_data.get("cash", 0)
+    sabotage_cost = round(SABOTAGE_BASE_COST + (attacker_cash * SABOTAGE_PCT_COST), 2)
+
+    if attacker_cash < sabotage_cost:
+        await update.message.reply_text(f"You need at least ${sabotage_cost:,.2f} to send your agent. You only have ${attacker_cash:,.2f}.")
+        return
+
+    # --- Load Target Data --- #
+    target_data = game.load_player_data(target_user_id)
+    if not target_data:
+        await update.message.reply_text("Couldn't find that player to sabotage.")
+        return
+
+    # --- Deduct Initial Cost from Attacker --- #
+    attacker_data["cash"] = attacker_cash - sabotage_cost
+    logger.info(f"Deducting sabotage cost ${sabotage_cost:,.2f} from attacker {attacker_user_id}")
+    # We save attacker data later based on outcome
+
+    # --- Determine Target Shop --- #
+    target_shops = target_data.get("shops", {})
+    shop_to_sabotage = game.get_top_earning_shop(target_shops)
+
+    if not shop_to_sabotage:
+        await update.message.reply_text("Your target doesn't seem to have any shops worth sabotaging right now.")
+        # Still charge the attacker for the attempt?
+        game.save_player_data(attacker_user_id, attacker_data)
+        return
+
+    # --- Roll for Success --- #
+    if random.random() < SABOTAGE_SUCCESS_CHANCE:
+        # --- Success --- #
+        logger.info(f"Sabotage SUCCESS by {attacker_user_id} against {target_user_id}'s {shop_to_sabotage}")
+        shutdown_applied = game.apply_shop_shutdown(target_user_id, shop_to_sabotage, SABOTAGE_DURATION_SECONDS)
+
+        if shutdown_applied:
+            # Notify Attacker
+            await update.message.reply_text(f"🐀 Success! Your agent planted the rat. {shop_to_sabotage} is shut down for a while! (Cost: ${sabotage_cost:,.2f})")
+            # Notify Target
+            try:
+                target_shop_display = target_data["shops"][shop_to_sabotage].get("custom_name", shop_to_sabotage)
+                await context.bot.send_message(
+                    chat_id=target_user_id,
+                    text=f"🚨 Bad news, boss! A health inspector (likely sent by a rival!) found a rat at your {target_shop_display} shop! It's shut down for cleaning for the next hour!"
+                )
+            except Exception as notify_err:
+                logger.error(f"Failed to notify target {target_user_id} of sabotage: {notify_err}")
+            # Save attacker data (cost already deducted)
+            game.save_player_data(attacker_user_id, attacker_data)
+        else:
+            # Should not happen if shop exists, but handle defensively
+            await update.message.reply_text(f"Your agent found the shop, but something went wrong applying the shutdown... The cost ${sabotage_cost:,.2f} was spent.")
+            game.save_player_data(attacker_user_id, attacker_data)
+
+    else:
+        # --- Failure --- #
+        logger.warning(f"Sabotage FAILED by {attacker_user_id} against {target_user_id}")
+        fine_amount = sabotage_cost # Fine equal to initial cost
+        restitution_amount = sabotage_cost # Restitution equal to initial cost
+        total_cost_to_attacker = sabotage_cost + fine_amount
+
+        attacker_data["cash"] -= fine_amount # Deduct additional fine
+        logger.info(f"Applying failure penalty: Fine ${fine_amount:,.2f} to attacker {attacker_user_id}")
+
+        # Grant restitution to target
+        target_data["cash"] = target_data.get("cash", 0) + restitution_amount
+        logger.info(f"Applying failure penalty: Restitution ${restitution_amount:,.2f} to target {target_user_id}")
+
+        # Save both players' data
+        game.save_player_data(attacker_user_id, attacker_data)
+        game.save_player_data(target_user_id, target_data)
+
+        # Notify Attacker
+        await update.message.reply_text(
+            f"🤦‍♂️ Your agent got caught! You had to pay a fine and restitution. Total cost: ${total_cost_to_attacker:,.2f}. Better luck next time!"
+        )
+        # Notify Target
+        try:
+            attacker_name = attacker_data.get("display_name", f"Player {attacker_user_id}")
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text=f"🎉 Good news! You caught a clumsy agent from {attacker_name} trying to sabotage you! You received ${restitution_amount:,.2f} in restitution!"
+            )
+        except Exception as notify_err:
+            logger.error(f"Failed to notify target {target_user_id} of failed sabotage: {notify_err}")
+
 def main() -> None:
     """Start the bot and scheduler."""
     logger.info("Building Telegram Application...")
@@ -1001,6 +1121,7 @@ def main() -> None:
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("setname", setname_command))
     application.add_handler(CommandHandler("renameshop", renameshop_command))
+    application.add_handler(CommandHandler("sabotage", sabotage_command))
     # application.add_handler(CommandHandler("boost", boost_command)) # Placeholder boost command
 
     logger.info("Adding payment handlers...")
