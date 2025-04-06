@@ -1163,6 +1163,52 @@ async def sabotage_choice_callback(update: Update, context: ContextTypes.DEFAULT
         reply_markup=reply_markup
     )
 
+# --- New Sabotage Shop Choice Callback Handler --- #
+async def sabotage_shop_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles the button press selecting the specific shop to sabotage."""
+    query = update.callback_query
+    user = query.from_user # This is the ATTACKER
+    logger.info(f"--- sabotage_shop_choice_callback ENTERED by user {user.id} ---")
+    await query.answer()
+
+    # Extract target user id and shop location from callback data
+    try:
+        # Format: sabo_shop_{target_user_id}_{location_name}
+        parts = query.data.split('_')
+        target_user_id = int(parts[2])
+        shop_location = parts[3]
+        # Re-join if location name had underscores (though unlikely with current names)
+        if len(parts) > 4:
+             shop_location = "_".join(parts[3:])
+        logger.info(f"Parsed target_user_id: {target_user_id}, shop_location: {shop_location}")
+
+    except (IndexError, ValueError):
+        logger.warning(f"Invalid sabotage shop choice callback data: {query.data}")
+        await query.edit_message_text("Invalid shop choice.")
+        return
+
+    attacker_user_id = user.id
+
+    # Check cooldown (important here before processing)
+    attacker_data = game.load_player_data(attacker_user_id)
+    if not attacker_data:
+        await query.edit_message_text("Error loading your data.")
+        return
+    now = time.time()
+    last_attempt_time = attacker_data.get("last_sabotage_attempt_time", 0.0)
+    time_since_last = now - last_attempt_time
+    if time_since_last < game.SABOTAGE_COOLDOWN_SECONDS:
+         remaining_cooldown = timedelta(seconds=int(game.SABOTAGE_COOLDOWN_SECONDS - time_since_last))
+         await query.edit_message_text(f"Your agents are still laying low! Sabotage available again in {str(remaining_cooldown).split('.')[0]}.")
+         return
+
+    target_name = game.find_display_name_by_id(target_user_id) or f"Player {target_user_id}"
+    await query.edit_message_text(f"Sending agent to hit {shop_location} at {target_name}'s place... Fingers crossed!")
+    logger.info(f"User {attacker_user_id} confirmed sabotage attempt against {target_user_id}'s shop: {shop_location}")
+
+    # Call the processing helper with the chosen shop
+    await _process_sabotage(context, attacker_user_id, target_user_id, shop_location)
+
 # --- Main Menu Callback Handler (Performs Actions) --- #
 async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles button presses from the main action keyboard, performs the action."""
