@@ -396,9 +396,10 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             ],
             [
                 InlineKeyboardButton("🏆 Leaderboard", callback_data="main_leaderboard"),
-                InlineKeyboardButton("🍕 Buy Coins", callback_data="main_buycoins"),
+                InlineKeyboardButton("🔪 Sabotage Rival", callback_data="main_sabotage"), # <<< Added Sabotage
             ],
             [
+                InlineKeyboardButton("🍕 Buy Coins", callback_data="main_buycoins"),
                 InlineKeyboardButton("❓ Help Guide", callback_data="main_help"),
             ]
         ]
@@ -648,6 +649,13 @@ async def expansion_choice_callback(update: Update, context: ContextTypes.DEFAUL
     logger.info(f"User {user.id} chose to expand to {target_location} via button.")
     # Pass the query object to the helper
     await _process_expansion(query, context, user.id, target_location)
+    # --- Show Status Again AFTER processing --- #
+    logger.debug(f"Expansion attempt processed for {user.id}, showing status.")
+    status_update = query.message or update
+    if status_update:
+        await status_command(status_update, context)
+    else:
+        logger.warning("Could not get message object to show status after expansion choice.")
 
 async def challenges_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -940,6 +948,9 @@ async def mafia_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await send_challenge_notifications(user.id, completed_challenges, context)
         # Check achievements based on final state
         await check_and_notify_achievements(user.id, context)
+        # --- Show Status Again --- #
+        logger.debug("Mafia event resolved, showing status again.")
+        await status_command(query.message, context)
 
     except Exception as e:
         logger.error(f"Error processing Mafia callback outcome for {user.id}: {e}", exc_info=True)
@@ -1194,6 +1205,14 @@ async def sabotage_shop_choice_callback(update: Update, context: ContextTypes.DE
     await query.edit_message_text(f"Sending agent to hit {shop_display} at {target_name}'s place... Fingers crossed!")
     logger.info(f"User {attacker_user_id} confirmed sabotage attempt against {target_user_id}'s shop: {shop_location}")
     await _process_sabotage(context, attacker_user_id, target_user_id, shop_location)
+    # --- Show Status Again AFTER processing --- #
+    logger.debug(f"Sabotage attempt processed for {attacker_user_id}, showing status.")
+    # Need to get a valid Update object for status command if called from query
+    status_update = query.message or update # Fallback if message is gone
+    if status_update:
+         await status_command(status_update, context)
+    else:
+         logger.warning("Could not get message object to show status after sabotage shop choice.")
 
 # --- Upgrade Shop Choice Callback Handler --- #
 async def upgrade_shop_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1209,6 +1228,13 @@ async def upgrade_shop_choice_callback(update: Update, context: ContextTypes.DEF
         logger.warning(f"Invalid upgrade shop choice callback data: {query.data}")
         await query.edit_message_text("Invalid shop choice."); return
     await _process_upgrade(context, user.id, shop_location, query=query)
+    # --- Show Status Again AFTER processing --- #
+    logger.debug(f"Upgrade attempt processed for {user.id}, showing status.")
+    status_update = query.message or update
+    if status_update:
+         await status_command(status_update, context)
+    else:
+         logger.warning("Could not get message object to show status after upgrade shop choice.")
 
 # --- Main Menu Callback Handler --- #
 async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1372,6 +1398,12 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                  "<i>Now get back to building that empire!</i>"
              )
              await context.bot.send_message(chat_id=chat_id, text=help_text, parse_mode="HTML")
+
+        # --- Sabotage --- #
+        elif action == "main_sabotage":
+             logger.debug(f"Handling main_sabotage action via button for {user.id}")
+             # Call sabotage_command logic to show target list
+             await sabotage_command(query.message, context)
 
         else:
             logger.warning(f"Received unknown main_menu callback query data: {action}")
