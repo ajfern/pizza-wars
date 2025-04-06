@@ -94,12 +94,12 @@ BASE_UPGRADE_COST = 75
 UPGRADE_COST_MULTIPLIER = 1.75
 UPGRADE_FAILURE_CHANCE = 0.15 # 15% chance for an upgrade to fail
 BASE_EXPANSION_COST = 1000 # Base cost to expand
-SABOTAGE_BASE_COST = 1000     # <<< Increased
-SABOTAGE_PCT_COST = 0.05      # <<< Increased (5%)
-SABOTAGE_SUCCESS_CHANCE = 0.40  # <<< Decreased (40%)
-SABOTAGE_BACKFIRE_CHANCE = 0.25 # <<< Added (25% on failure)
+SABOTAGE_BASE_COST = 1000
+SABOTAGE_PCT_COST = 0.05
+SABOTAGE_SUCCESS_CHANCE = 0.40 # 60% Failure Chance
+SABOTAGE_BACKFIRE_CHANCE = 0.10 # <<< Changed to 10% (of failures)
 SABOTAGE_DURATION_SECONDS = 3600
-SABOTAGE_COOLDOWN_SECONDS = 900 # <<< Added (15 minutes)
+SABOTAGE_COOLDOWN_SECONDS = 900
 
 # Expansion: Location: (Req Type, Req Val, GDP Factor, Cost Scale Factor)
 # Req Types: 'level' (initial shop level), 'total_income', 'shops_count', 'has_shop' (requires specific shop)
