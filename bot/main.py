@@ -1168,7 +1168,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(mafia_button_callback, pattern="^mafia_(pay|refuse)$"))
     application.add_handler(CallbackQueryHandler(expansion_choice_callback, pattern="^expand_"))
     application.add_handler(CallbackQueryHandler(sabotage_choice_callback, pattern="^sabotage_"))
-    application.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_.*"))
+    # application.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_.*")) # <<< Ensure this is removed/commented
 
     # Schedule challenge generation jobs
     logger.info("Setting up scheduled jobs...")
