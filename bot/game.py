@@ -43,7 +43,7 @@ def initialize_database():
         logger.error("Cannot initialize database without a connection.")
         return
 
-    create_table_sql = """
+    create_players_sql = """
     CREATE TABLE IF NOT EXISTS players (
         user_id BIGINT PRIMARY KEY,
         display_name TEXT,
@@ -61,14 +61,22 @@ def initialize_database():
         collection_count INTEGER DEFAULT 0
     );
     """
+    create_perf_sql = """
+    CREATE TABLE IF NOT EXISTS location_performance (
+        location_name TEXT PRIMARY KEY,
+        current_multiplier NUMERIC(4, 2) DEFAULT 1.0,
+        last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+    """
     try:
         with conn.cursor() as cur:
-            cur.execute(create_table_sql)
+            cur.execute(create_players_sql)
+            cur.execute(create_perf_sql)
         conn.commit()
-        logger.info("Players table checked/created successfully.")
+        logger.info("Schema checked/created successfully (players, location_performance).")
     except psycopg2.DatabaseError as e:
-        logger.error(f"Error initializing database table: {e}", exc_info=True)
-        conn.rollback() # Rollback any partial changes
+        logger.error(f"Error initializing database tables: {e}", exc_info=True)
+        conn.rollback()
 
 # --- Game Constants ---
 INITIAL_CASH = 10
@@ -391,17 +399,18 @@ def calculate_income_rate(shops: dict) -> float:
     return total_rate
 
 def get_shop_income_rate(shop_name: str, level: int) -> float:
-    """Calculates the income rate for a single shop, including GDP factor."""
-    gdp_factor = 1.0 # Default for initial shop
+    """Calculates the income rate, including base GDP and current performance."""
+    base_gdp_factor = 1.0
     if shop_name != INITIAL_SHOP_NAME and shop_name in EXPANSION_LOCATIONS:
-        # GDP Factor is the 3rd element (index 2)
         if len(EXPANSION_LOCATIONS[shop_name]) > 2:
-             gdp_factor = EXPANSION_LOCATIONS[shop_name][2]
+             base_gdp_factor = EXPANSION_LOCATIONS[shop_name][2]
         else:
              logger.warning(f"Missing GDP factor for expansion {shop_name}, using 1.0")
 
-    shop_rate = (BASE_INCOME_PER_SECOND * level) * gdp_factor
-    return shop_rate
+    current_performance = get_current_performance_multiplier(shop_name)
+    # Combine base potential with current market fluctuation
+    effective_rate = (BASE_INCOME_PER_SECOND * level * base_gdp_factor) * current_performance
+    return effective_rate
 
 def calculate_uncollected_income(player_data: dict) -> float:
     current_time = time.time()
@@ -820,8 +829,10 @@ def format_status(player_data: dict) -> str:
             level = data.get("level", 1)
             custom_name = data.get("custom_name", name)
             upgrade_cost = get_upgrade_cost(level, name)
+            current_perf = get_current_performance_multiplier(name)
+            perf_emoji = "📈" if current_perf > 1.1 else "📉" if current_perf < 0.9 else "🤷‍♂️"
             display_shop_name = f"{custom_name} ({name})" if custom_name != name else name
-            status_lines.append(f"  - <b>{display_shop_name}:</b> Level {level} (Upgrade Cost: ${upgrade_cost:,.2f})")
+            status_lines.append(f"  - {perf_emoji} <b>{display_shop_name}:</b> Level {level} (Upgrade Cost: ${upgrade_cost:,.2f})")
 
     income_rate = calculate_income_rate(shops)
     status_lines.append(f"<b>Current Income Rate:</b> ${income_rate:.2f}/sec")
@@ -836,9 +847,11 @@ def format_status(player_data: dict) -> str:
             req_data = EXPANSION_LOCATIONS[loc]
             req_type = req_data[0]
             req_value = req_data[1]
-            gdp_factor = req_data[2]
+            # gdp_factor = req_data[2] # Base GDP not shown here anymore, just current perf
             cost_scale = req_data[3]
             expansion_cost = get_expansion_cost(loc)
+            current_perf = get_current_performance_multiplier(loc)
+            perf_emoji = "📈" if current_perf > 1.1 else "📉" if current_perf < 0.9 else "🤷‍♂️"
 
             # Display requirement based on type
             if req_type == "level": req_str = f"(Req: {INITIAL_SHOP_NAME} Lvl {req_value})"
@@ -848,8 +861,8 @@ def format_status(player_data: dict) -> str:
             elif req_type == "has_shop": req_str = f"(Req: Own {req_value})"
             else: req_str = "(Unknown Req)"
 
-            potential_str = f"📈x{gdp_factor:.1f}"
-            status_lines.append(f"  - {loc} {potential_str} - Cost: ${expansion_cost:,.2f} {req_str} - Use /expand {loc.lower()}")
+            # Show Current Performance instead of Base GDP
+            status_lines.append(f"  - {loc} {perf_emoji}x{current_perf:.1f} - Cost: ${expansion_cost:,.2f} {req_str} - Use /expand {loc.lower()}")
     else:
         status_lines.append("  None available right now. Keep upgrading!")
 
@@ -922,3 +935,65 @@ def get_leaderboard_data(limit: int = 10) -> list[tuple[int, str | None, float]]
         logger.error(f"Unexpected error fetching leaderboard: {e}", exc_info=True)
 
     return results
+
+# --- New Location Performance Functions ---
+def get_current_performance_multiplier(location_name: str) -> float:
+    """Gets the current performance multiplier for a location from the DB."""
+    if location_name == INITIAL_SHOP_NAME: # Base location always has 1.0x performance
+        return 1.0
+
+    conn = get_db_connection()
+    if not conn: return 1.0 # Default to 1.0 if DB error
+
+    sql = "SELECT current_multiplier FROM location_performance WHERE location_name = %s;"
+    multiplier = 1.0
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (location_name,))
+            result = cur.fetchone()
+            if result:
+                multiplier = float(result[0])
+            else:
+                 # If location not in table yet, return 1.0 and log warning
+                 logger.warning(f"No performance data found for {location_name}, returning 1.0.")
+    except psycopg2.DatabaseError as e:
+        logger.error(f"DB error fetching performance multiplier for {location_name}: {e}", exc_info=True)
+        conn.rollback()
+    except Exception as e:
+        logger.error(f"Unexpected error fetching performance multiplier for {location_name}: {e}", exc_info=True)
+
+    # Clamp multiplier just in case? Optional.
+    # multiplier = max(0.5, min(2.0, multiplier))
+    return multiplier
+
+def update_location_performance():
+    """Calculates and saves new random multipliers for all locations."""
+    logger.info("Updating location performance multipliers...")
+    conn = get_db_connection()
+    if not conn: return
+
+    sql = """
+    INSERT INTO location_performance (location_name, current_multiplier, last_updated)
+    VALUES (%s, %s, NOW())
+    ON CONFLICT (location_name) DO UPDATE SET
+        current_multiplier = EXCLUDED.current_multiplier,
+        last_updated = EXCLUDED.last_updated;
+    """
+    updates = []
+    for name, data in EXPANSION_LOCATIONS.items():
+        # Fluctuate around 1.0, range e.g. 0.7 to 1.5
+        fluctuation = random.uniform(0.7, 1.5)
+        new_multiplier = round(fluctuation, 2)
+        updates.append((name, new_multiplier))
+        logger.debug(f"New performance for {name}: {new_multiplier:.2f}")
+
+    try:
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_batch(cur, sql, updates)
+        conn.commit()
+        logger.info(f"Successfully updated performance multipliers for {len(updates)} locations.")
+    except psycopg2.DatabaseError as e:
+        logger.error(f"DB error updating location performance: {e}", exc_info=True)
+        conn.rollback()
+    except Exception as e:
+        logger.error(f"Unexpected error updating location performance: {e}", exc_info=True)

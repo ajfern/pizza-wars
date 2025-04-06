@@ -134,6 +134,14 @@ async def generate_weekly_challenges_job(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Failed to fetch user IDs for weekly challenge job: {e}", exc_info=True)
 
+async def update_location_performance_job(context: ContextTypes.DEFAULT_TYPE):
+    """Scheduled job to update location performance multipliers."""
+    logger.info("Running location performance update job...")
+    try:
+        game.update_location_performance()
+    except Exception as e:
+        logger.error(f"Error in update_location_performance_job: {e}", exc_info=True)
+
 # --- Command Handlers ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -408,7 +416,7 @@ async def expand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _process_expansion(update, context, user.id, target_expansion_name)
         return
 
-    # --- No arguments: Show available expansions with buttons & costs --- #
+    # --- No arguments: Show available expansions with buttons & costs/perf --- #
     logger.info(f"User {user.id} requested expansion list.")
     player_data = game.load_player_data(user.id)
     if not player_data:
@@ -424,19 +432,20 @@ async def expand_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     keyboard = []
     row = []
     for i, loc in enumerate(available):
-        gdp_factor = game.EXPANSION_LOCATIONS[loc][2]
         cost = game.get_expansion_cost(loc)
-        # Add cost to button text
-        button_text = f"{loc} (📈x{gdp_factor:.1f} | ${cost:,.0f})"
+        current_perf = game.get_current_performance_multiplier(loc)
+        perf_emoji = "📈" if current_perf > 1.1 else "📉" if current_perf < 0.9 else "🤷‍♂️"
+        # Show performance and cost on button
+        button_text = f"{loc} {perf_emoji}x{current_perf:.1f} (${cost:,.0f})"
         row.append(InlineKeyboardButton(button_text, callback_data=f"expand_{loc}"))
         if (i + 1) % 2 == 0:
             keyboard.append(row)
             row = []
-    if row: # Add any remaining buttons
+    if row:
         keyboard.append(row)
 
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Ready to expand the empire? Choose your next conquest (Cost shown):", reply_markup=reply_markup)
+    await update.message.reply_text("Ready to expand the empire? Choose your next conquest (Perf/Cost shown):", reply_markup=reply_markup)
 
 # --- Helper for processing expansion --- #
 async def _process_expansion(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, target_expansion_name: str):
@@ -962,9 +971,11 @@ def main() -> None:
     logger.info("Setting up scheduled jobs...")
     try:
         # Run daily at 00:01 UTC
-        scheduler.add_job(generate_daily_challenges_job, CronTrigger(hour=0, minute=1), args=[application])
+        scheduler.add_job(generate_daily_challenges_job, CronTrigger(hour=0, minute=1, timezone="UTC"), args=[application])
         # Run weekly on Monday at 00:05 UTC
-        scheduler.add_job(generate_weekly_challenges_job, CronTrigger(day_of_week='mon', hour=0, minute=5), args=[application])
+        scheduler.add_job(generate_weekly_challenges_job, CronTrigger(day_of_week='mon', hour=0, minute=5, timezone="UTC"), args=[application])
+        # Add new job for performance update (e.g., daily at 00:03 UTC)
+        scheduler.add_job(update_location_performance_job, CronTrigger(hour=0, minute=3, timezone="UTC"), args=[application])
         scheduler.start()
         logger.info("Scheduler started successfully.")
     except Exception as e:
