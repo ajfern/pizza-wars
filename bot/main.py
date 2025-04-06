@@ -1178,7 +1178,7 @@ async def sabotage_choice_callback(update: Update, context: ContextTypes.DEFAULT
 async def sabotage_shop_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the button press selecting the specific shop to sabotage."""
     query = update.callback_query
-    user = query.from_user # This is the ATTACKER
+    user = query.from_user
     logger.info(f"--- sabotage_shop_choice_callback ENTERED by user {user.id} ---")
     await query.answer()
 
@@ -1213,45 +1213,37 @@ async def sabotage_shop_choice_callback(update: Update, context: ContextTypes.DE
     logger.info(f"User {attacker_user_id} confirmed sabotage attempt against {target_user_id}'s shop: {shop_location}")
     await _process_sabotage(context, attacker_user_id, target_user_id, shop_location)
 
-# --- NEW Callback Handler for Upgrade Shop Buttons --- #
-async def upgrade_shop_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles the button press selecting the specific shop to upgrade."""
-    query = update.callback_query
-    user = query.from_user
-    logger.info(f"--- upgrade_shop_choice_callback ENTERED by user {user.id} ---")
-    await query.answer()
-    try:
-        shop_location = query.data.split("upgrade_shop_", 1)[1]
-        logger.info(f"Parsed shop_location: {shop_location} for user {user.id}")
-    except IndexError:
-        logger.warning(f"Invalid upgrade shop choice callback data: {query.data}")
-        await query.edit_message_text("Invalid shop choice."); return
-    await _process_upgrade(context, user.id, shop_location, query=query)
-
 # --- Main Menu Callback Handler (Performs Actions) --- #
 async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles button presses from the main action keyboard, performs the action."""
     query = update.callback_query
     user = query.from_user
     action = query.data
-    chat_id = query.message.chat_id # Use chat_id for sending new messages
+    # Use the chat_id from the message the button was attached to
+    chat_id = query.message.chat_id if query.message else None
     logger.info(f"--- main_menu_callback ENTERED by user {user.id}, action: {action} ---")
 
-    # Answer callback query quickly
-    try:
-        await query.answer()
-        logger.info(f"Callback query answered for main_menu action {action}, user {user.id}.")
-    except Exception as e: logger.error(f"ERROR answering callback query for main_menu: {e}", exc_info=True); return
+    if not user or not chat_id:
+         logger.warning("Could not get user or chat_id from main_menu_callback query.")
+         try: await query.answer("Error fetching user/chat info.") # Notify user on button
+         except Exception: pass
+         return
 
-    # Remove keyboard first
-    try: await query.edit_message_reply_markup(reply_markup=None); logger.debug(f"Original status keyboard removed.")
+    # Answer callback query quickly
+    try: await query.answer()
+    except Exception as e: logger.warning(f"Failed to answer main_menu callback: {e}"); # Non-critical
+
+    # Remove keyboard from original status message first
+    try: await query.edit_message_reply_markup(reply_markup=None)
     except Exception as e: logger.warning(f"Failed to remove original status keyboard: {e}")
 
+    # --- Perform Action based on Callback Data --- #
     try:
         await update_player_display_name(user.id, user)
+
+        # --- Collect --- #
         if action == "main_collect":
-            logger.debug(f"Handling main_collect action for {user.id}")
-            # Replicate collect_command logic
+            logger.debug(f"Handling main_collect action via button for {user.id}")
             collected_amount, completed_challenges, is_mafia_event, mafia_demand = game.collect_income(user.id)
             if is_mafia_event:
                 if mafia_demand is None or mafia_demand <= 0:
@@ -1266,8 +1258,7 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 tip_message, pineapple_message = "", ""
                 if random.random() < 0.15: # Tip chance
                     player_data_tip = game.load_player_data(user.id)
-                    tip_amount = round(random.uniform(collected_amount * 0.05, collected_amount * 0.2) + random.uniform(5, 50), 2)
-                    tip_amount = max(5.0, tip_amount)
+                    tip_amount = round(random.uniform(collected_amount * 0.05, collected_amount * 0.2) + random.uniform(5, 50), 2); tip_amount = max(5.0, tip_amount)
                     player_data_tip["cash"] = player_data_tip.get("cash", 0) + tip_amount
                     game.save_player_data(user.id, player_data_tip)
                     tip_message = f"\n🍕 Wiseguy tipped ya ${tip_amount:.2f}!"
@@ -1279,12 +1270,14 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             else:
                 await context.bot.send_message(chat_id=chat_id, text="Nothin' to collect, boss. Ovens are cold!")
 
+        # --- Upgrade (Show Options) --- #
         elif action == "main_upgrade":
-            logger.debug(f"Handling main_upgrade action for {user.id} - showing options")
-            await _show_upgrade_options(query, context) # <<< Call helper to show buttons
+            logger.debug(f"Handling main_upgrade action via button for {user.id} - showing options")
+            await _show_upgrade_options(query, context)
 
+        # --- Expand (Show Options) --- #
         elif action == "main_expand":
-            logger.debug(f"Handling main_expand action for {user.id}")
+            logger.debug(f"Handling main_expand action via button for {user.id} - showing options")
             # Replicate expand_command logic (no args case)
             player_data = game.load_player_data(user.id)
             if not player_data:
@@ -1294,11 +1287,9 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 if not available:
                      await context.bot.send_message(chat_id=chat_id, text="No new turf available right now, boss!")
                 else:
-                     keyboard = []
-                     row = []
+                     keyboard = []; row = []
                      for i, loc in enumerate(available):
-                         cost = game.get_expansion_cost(loc)
-                         current_perf = game.get_current_performance_multiplier(loc)
+                         cost = game.get_expansion_cost(loc); current_perf = game.get_current_performance_multiplier(loc)
                          perf_emoji = "📈" if current_perf > 1.1 else "📉" if current_perf < 0.9 else "🤷‍♂️"
                          button_text = f"{loc} {perf_emoji}x{current_perf:.1f} (${cost:,.0f})"
                          row.append(InlineKeyboardButton(button_text, callback_data=f"expand_{loc}"))
@@ -1307,21 +1298,83 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                      reply_markup = InlineKeyboardMarkup(keyboard)
                      await context.bot.send_message(chat_id=chat_id, text="Choose your next conquest (Perf/Cost shown):", reply_markup=reply_markup)
 
+        # --- Challenges --- #
         elif action == "main_challenges":
-             logger.debug(f"Handling main_challenges action for {user.id}")
-             await challenges_command(query.message, context)
+             logger.debug(f"Handling main_challenges action via button for {user.id}")
+             # Replicate challenges_command logic
+             player_data = game.load_player_data(user.id); needs_save = False
+             if player_data.get("active_challenges", {}).get("daily") is None:
+                 game.generate_new_challenges(user.id, 'daily'); needs_save = True
+             if player_data.get("active_challenges", {}).get("weekly") is None:
+                 game.generate_new_challenges(user.id, 'weekly'); needs_save = True
+             if needs_save: player_data = game.load_player_data(user.id)
+             if player_data:
+                 stats = player_data.get("stats", {}); active_challenges = player_data.get("active_challenges", {}); challenge_progress = player_data.get("challenge_progress", {})
+                 lines = ["<b>--- Your Active Challenges ---</b>"]
+                 for timescale in ["daily", "weekly"]:
+                     challenge = active_challenges.get(timescale); lines.append(f"\n<b>{timescale.capitalize()} Challenge:</b>")
+                     if challenge:
+                         metric = challenge["metric"]; goal = challenge["goal"]; current_prog = stats.get(metric, 0)
+                         is_complete = challenge_progress.get(timescale, {}).get(challenge["id"], False)
+                         prog_str = f" ({current_prog:,.0f} / {goal:,.0f})" if isinstance(goal, (int, float)) else ""
+                         status_str = " ✅ Completed!" if is_complete else prog_str
+                         lines.append(f"  - {challenge['description']}{status_str}")
+                         lines.append(f"    Reward: {challenge['reward_value']:,} {challenge['reward_type'].upper()}")
+                     else: lines.append("  Error generating challenge.")
+                 await context.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
+             else:
+                 await context.bot.send_message(chat_id=chat_id, text="Could not load challenge data.")
 
+        # --- Leaderboard --- #
         elif action == "main_leaderboard":
-             logger.debug(f"Handling main_leaderboard action for {user.id}")
-             await leaderboard_command(query.message, context)
+             logger.debug(f"Handling main_leaderboard action via button for {user.id}")
+             # Replicate leaderboard_command logic
+             top_income = game.get_leaderboard_data(limit=10)
+             top_cash = game.get_cash_leaderboard_data(limit=10)
+             lines = ["<b>🏆 Global Income Leaderboard 🏆</b>\n(Total Earned)\n"]
+             if not top_income: lines.append("<i>No income earned yet!</i>")
+             else: lines.extend([f"{(i+1)}. {(name or f'Player {pid}')[:25]} - ${inc:,.2f}" for i, (pid, name, inc) in enumerate(top_income)])
+             lines.append("\n<b>🤑 William's Wallet Leaderboard 🤑</b>\n(Current Cash)\n")
+             if not top_cash: lines.append("<i>Everyone's broke!</i>")
+             else: lines.extend([f"{(i+1)}. {(name or f'Player {pid}')[:25]} - ${cash:,.2f}" for i, (pid, name, cash) in enumerate(top_cash)])
+             await context.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
 
+        # --- Buy Coins --- #
         elif action == "main_buycoins":
-             logger.debug(f"Handling main_buycoins action for {user.id}")
-             await buy_coins_command(query.message, context)
+             logger.debug(f"Handling main_buycoins action via button for {user.id}")
+             # Replicate buy_coins_command logic
+             if not PAYMENT_PROVIDER_TOKEN:
+                 await context.bot.send_message(chat_id=chat_id, text="My owner still hasn't signed up for a Stripe account...")
+             else:
+                 for pack_id, (name, desc, price_cents, coin_amount) in game.PIZZA_COIN_PACKS.items():
+                     title = f"{name} ({coin_amount} Coins)"; payload = f"BUY_{pack_id.upper()}_{user.id}"; currency = "USD"; prices = [LabeledPrice(label=name, amount=price_cents)]
+                     try: await context.bot.send_invoice(chat_id=user.id, title=title, description=desc, payload=payload, provider_token=PAYMENT_PROVIDER_TOKEN, currency=currency, prices=prices)
+                     except Exception as e: logger.error(f"Failed to send invoice {pack_id} from button: {e}"); await context.bot.send_message(chat_id=chat_id, text=f"Couldn't start purchase for {name}.")
 
+        # --- Help --- #
         elif action == "main_help":
-             logger.debug(f"Handling main_help action for {user.id}")
-             await help_command(query.message, context)
+             logger.debug(f"Handling main_help action via button for {user.id}")
+             # Replicate help_command logic
+             help_text = (
+                 "🍕 <b>Pizza Empire Command Guide</b> 🍕\n\n" # ... (Copy help text structure here)
+                 "<b>Core Gameplay:</b>\n"
+                 "/start - Initialize your pizza empire (or view this message again).\n"
+                 "/setname [name] - Set your franchise name (e.g., `/setname Luigi's Finest`).\n"
+                 "/renameshop [loc] [name] - Rename a specific shop (e.g., `/renameshop Brooklyn Luigi's`).\n"
+                 "/status [s:key] - Check status. Optionally sort shops by `s:name`, `s:level`, or `s:cost` (e.g., `/status s:cost`).\n"
+                 "/collect - Scoop up the cash your shops have earned!\n"
+                 "/upgrade - Show available shop upgrades (or use `/upgrade [shop]` directly).\n"
+                 "/expand - List expansion options (with costs!) or show expansion buttons.\n\n"
+                 "<b>Progression & Fun:</b>\n"
+                 "/challenges - View your current daily and weekly challenges.\n"
+                 "/leaderboard - See top players by total income earned AND current cash.\n"
+                 "/buycoins - View options to purchase Pizza Coins 🍕 (premium currency).\n"
+                 "/help - Show this command guide.\n\n"
+                 "<b>PvP Actions:</b>\n"
+                 "/sabotage - Choose a player and shop to sabotage (Costs cash, high risk/reward!).\n\n"
+                 "<i>Now get back to building that empire!</i>"
+             )
+             await context.bot.send_message(chat_id=chat_id, text=help_text, parse_mode="HTML")
 
         else:
             logger.warning(f"Received unknown main_menu callback query data: {action}")
@@ -1366,7 +1419,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(expansion_choice_callback, pattern="^expand_"))
     application.add_handler(CallbackQueryHandler(sabotage_choice_callback, pattern="^sabotage_")) # Target player choice
     application.add_handler(CallbackQueryHandler(sabotage_shop_choice_callback, pattern="^sabo_shop_")) # Target shop choice
-    application.add_handler(CallbackQueryHandler(upgrade_shop_choice_callback, pattern="^upgrade_shop_")) # Upgrade shop choice
+    application.add_handler(CallbackQueryHandler(upgrade_shop_choice_callback, pattern="^upgrade_shop_")) # <<< Add this handler back
     application.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_.*")) # Status buttons
 
     # Schedule challenge generation jobs
