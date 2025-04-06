@@ -5,7 +5,7 @@ import random # For tips!
 import time # <<< Added missing import
 import re # For sanitization
 import html # For escaping
-from datetime import time as dt_time, timedelta
+from datetime import time as dt_time, timedelta, datetime, timezone
 
 # Telegram Core Types
 from telegram import Update, LabeledPrice, ShippingOption, Invoice, InlineKeyboardButton, InlineKeyboardMarkup
@@ -30,8 +30,20 @@ from apscheduler.triggers.cron import CronTrigger
 # Import game logic functions
 import game # Corrected import
 
-# Summary Version - CHANGE THIS WHEN UPDATING change_summary.txt
-CURRENT_SUMMARY_VERSION = "20250406-v1"
+# --- Change Log & Version --- #
+# Manually update this list (newest first) and the version before deploying changes.
+CHANGE_LOG_ENTRIES = [
+    "**Sabotage Overhaul:** Sending agents is riskier! Costs more ($1k + 5% cash), lower success (40%), 25% backfire chance, 15-min cooldown.",
+    "**Leaderboards Combined:** `/leaderboard` now shows both Total Income & Current Cash leaderboards.",
+    "**Dynamic Performance:** Location income now fluctuates daily! Check `/status` or `/expand` for current multipliers (📈/📉/🤷‍♂️).",
+    "**Expansion Costs:** Expanding now costs money, scaling with location potential.",
+    "**Shop Naming:** Give shops custom names with `/renameshop [Location] [New Name]`!",
+    "**Mafia Event:** Watch out on your 5th collection! You might get a visit...",
+    "**Upgrade Failure:** Upgrades now have a 15% chance to fail (costing you dough!).",
+    # Add new entries above this line
+]
+# Use a date format like YYYYMMDD or a simple version number
+CURRENT_SUMMARY_VERSION = "20240406.1"
 
 # Enable logging (ensure logger is configured as before)
 logging.basicConfig(
@@ -94,15 +106,26 @@ async def send_challenge_notifications(user_id: int, messages: list[str], contex
     except Exception as e:
         logger.error(f"Error sending challenge notification to {user_id}: {e}", exc_info=True)
 
-# --- Helper Function to send summary ---
+# --- Helper Function to send summary (Modified) ---
 async def send_change_summary(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Sending change summary version {CURRENT_SUMMARY_VERSION} to user {user_id}")
     try:
-        with open("change_summary.txt", "r") as f:
-            summary_text = f.read()
-        # Maybe add a header/footer?
-        full_message = f"📢 <b>Recent Game Updates ({CURRENT_SUMMARY_VERSION}):</b>\n\n{summary_text}"
+        if not CHANGE_LOG_ENTRIES:
+            logger.warning("CHANGE_LOG_ENTRIES list is empty, cannot send summary.")
+            return
+
+        # Format the message
+        summary_points = "\n".join([f"*   {entry}" for entry in CHANGE_LOG_ENTRIES])
+        # Use an appropriate date or leave as version string
+        today_date = datetime.now(timezone.utc).strftime("%B %d, %Y")
+        full_message = (
+            f"📢 <b>Updates to Pizza Wars for {today_date} ({CURRENT_SUMMARY_VERSION}):</b>\n\n"
+            f"{summary_points}\n\n"
+            f"<i>Keep building that empire!</i>"
+        )
+
         await context.bot.send_message(chat_id=user_id, text=full_message, parse_mode="HTML")
+
         # Update player's seen version in DB
         player_data = game.load_player_data(user_id)
         if player_data:
@@ -110,8 +133,6 @@ async def send_change_summary(user_id: int, context: ContextTypes.DEFAULT_TYPE):
             game.save_player_data(user_id, player_data)
         else:
              logger.warning(f"Could not load player data for {user_id} after sending summary to update seen version.")
-    except FileNotFoundError:
-        logger.error("change_summary.txt not found!")
     except Exception as e:
         logger.error(f"Error sending change summary to {user_id}: {e}", exc_info=True)
 
