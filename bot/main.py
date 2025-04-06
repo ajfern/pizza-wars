@@ -616,6 +616,35 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"Error generating leaderboard: {e}", exc_info=True)
         await update.message.reply_text("Couldn't fetch the leaderboard right now, try again later.")
 
+# --- New Wallet Leaderboard Command --- #
+async def walletboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Displays the global leaderboard based on current cash."""
+    user = update.effective_user
+    if not user:
+        return
+    logger.info(f"User {user.id} requested wallet leaderboard.")
+    await update_player_display_name(user.id, user)
+
+    try:
+        top_players = game.get_cash_leaderboard_data(limit=10)
+
+        if not top_players:
+            await update.message.reply_text("William's Wallet is empty! Everyone's broke!")
+            return
+
+        lines = ["<b>🤑 William's Wallet Leaderboard 🤑</b>\n(Based on Current Cash)\n"]
+        for i, (player_id, display_name, cash_amount) in enumerate(top_players):
+            rank = i + 1
+            name = display_name or f"Player {player_id}"
+            if len(name) > 25: name = name[:22] + "..."
+            lines.append(f"{rank}. {name} - ${cash_amount:,.2f}")
+
+        await update.message.reply_html("\n".join(lines))
+
+    except Exception as e:
+        logger.error(f"Error generating wallet leaderboard: {e}", exc_info=True)
+        await update.message.reply_text("Couldn't fetch William's Wallet right now, try again later.")
+
 # --- Help Command --- #
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a helpful message listing available commands."""
@@ -634,7 +663,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/expand [location] - List expansion options (with costs!) or expand to a new location.\n\n"
         "<b>Progression & Fun:</b>\n"
         "/challenges - View your current daily and weekly challenges.\n"
-        "/leaderboard - See who's top dog on the global leaderboard.\n"
+        "/leaderboard - See top players by total income earned.\n"
+        "/walletboard - See top players by current cash on hand.\n"
         "/buycoins - View options to purchase Pizza Coins 🍕 (premium currency).\n"
         # Add /boost here if/when implemented
         "/help - Show this command guide.\n\n"
@@ -946,6 +976,7 @@ def main() -> None:
     application.add_handler(CommandHandler("challenges", challenges_command))
     application.add_handler(CommandHandler("buycoins", buy_coins_command))
     application.add_handler(CommandHandler("leaderboard", leaderboard_command))
+    application.add_handler(CommandHandler("walletboard", walletboard_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("setname", setname_command))
     application.add_handler(CommandHandler("renameshop", renameshop_command))

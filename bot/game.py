@@ -936,6 +936,35 @@ def get_leaderboard_data(limit: int = 10) -> list[tuple[int, str | None, float]]
 
     return results
 
+def get_cash_leaderboard_data(limit: int = 10) -> list[tuple[int, str | None, float]]:
+    """Fetches top players based on current cash on hand."""
+    logger.debug(f"Fetching cash leaderboard data (top {limit})")
+    conn = get_db_connection()
+    if not conn: return []
+
+    # Order by cash DESC
+    sql = """
+    SELECT user_id, display_name, cash
+    FROM players
+    ORDER BY cash DESC
+    LIMIT %s;
+    """
+    results = []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (limit,))
+            fetched_results = cur.fetchall()
+            # Convert numeric cash back to float
+            results = [(row[0], row[1], float(row[2])) for row in fetched_results]
+        logger.debug(f"Fetched {len(results)} rows for cash leaderboard.")
+    except psycopg2.DatabaseError as e:
+        logger.error(f"Database error fetching cash leaderboard: {e}", exc_info=True)
+        conn.rollback()
+    except Exception as e:
+        logger.error(f"Unexpected error fetching cash leaderboard: {e}", exc_info=True)
+
+    return results
+
 # --- New Location Performance Functions ---
 def get_current_performance_multiplier(location_name: str) -> float:
     """Gets the current performance multiplier for a location from the DB."""
