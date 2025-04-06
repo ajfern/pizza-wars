@@ -58,7 +58,8 @@ def initialize_database():
         stats JSONB DEFAULT '{}'::jsonb,
         total_income_earned NUMERIC(18, 4) DEFAULT 0.0,
         last_login_time TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        collection_count INTEGER DEFAULT 0
+        collection_count INTEGER DEFAULT 0,
+        last_sabotage_attempt_time TIMESTAMP WITH TIME ZONE
     );
     """
     create_perf_sql = """
@@ -92,6 +93,12 @@ BASE_UPGRADE_COST = 75
 UPGRADE_COST_MULTIPLIER = 1.75
 UPGRADE_FAILURE_CHANCE = 0.15 # 15% chance for an upgrade to fail
 BASE_EXPANSION_COST = 1000 # Base cost to expand
+SABOTAGE_BASE_COST = 1000     # <<< Increased
+SABOTAGE_PCT_COST = 0.05      # <<< Increased (5%)
+SABOTAGE_SUCCESS_CHANCE = 0.40  # <<< Decreased (40%)
+SABOTAGE_BACKFIRE_CHANCE = 0.25 # <<< Added (25% on failure)
+SABOTAGE_DURATION_SECONDS = 3600
+SABOTAGE_COOLDOWN_SECONDS = 900 # <<< Added (15 minutes)
 
 # Expansion: Location: (Req Type, Req Val, GDP Factor, Cost Scale Factor)
 # Req Types: 'level' (initial shop level), 'total_income', 'shops_count', 'has_shop' (requires specific shop)
@@ -187,7 +194,7 @@ def load_player_data(user_id: int) -> dict | None:
     sql = """
     SELECT display_name, franchise_name, cash, pizza_coins, shops, unlocked_achievements, current_title,
            active_challenges, challenge_progress, stats, total_income_earned, last_login_time,
-           collection_count
+           collection_count, last_sabotage_attempt_time
     FROM players WHERE user_id = %s;
     """
     default_state = get_default_player_state(user_id)
@@ -213,7 +220,8 @@ def load_player_data(user_id: int) -> dict | None:
                 "stats": result[9] if result[9] is not None else {},
                 "total_income_earned": float(result[10]),
                 "last_login_time": result[11].timestamp() if result[11] else time.time(),
-                "collection_count": result[12] or 0
+                "collection_count": result[12] or 0,
+                "last_sabotage_attempt_time": result[13].timestamp() if result[13] else 0.0
             }
             player_data.setdefault("active_challenges", {'daily': None, 'weekly': None})
             player_data.setdefault("challenge_progress", {'daily': {}, 'weekly': {}})
@@ -268,6 +276,7 @@ def save_player_data(user_id: int, data: dict) -> None:
     data.setdefault("last_login_time", time.time()) # Use current time if missing
     data.setdefault("collection_count", 0) # Ensure collection_count key exists
     data.setdefault("franchise_name", None) # Ensure key exists
+    data.setdefault("last_sabotage_attempt_time", 0.0) # <<< Added default
 
     # Ensure default sub-dicts/lists for JSONB compatibility
     data["shops"] = data.get("shops") or {}
@@ -292,9 +301,9 @@ def save_player_data(user_id: int, data: dict) -> None:
     INSERT INTO players (
         user_id, display_name, franchise_name, cash, pizza_coins, shops, unlocked_achievements, current_title,
         active_challenges, challenge_progress, stats, total_income_earned, last_login_time,
-        collection_count
+        collection_count, last_sabotage_attempt_time
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s), %s)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, to_timestamp(%s), %s, to_timestamp(%s))
     ON CONFLICT (user_id) DO UPDATE SET
         display_name = EXCLUDED.display_name,
         franchise_name = EXCLUDED.franchise_name,
@@ -308,7 +317,8 @@ def save_player_data(user_id: int, data: dict) -> None:
         stats = EXCLUDED.stats,
         total_income_earned = EXCLUDED.total_income_earned,
         last_login_time = EXCLUDED.last_login_time,
-        collection_count = EXCLUDED.collection_count;
+        collection_count = EXCLUDED.collection_count,
+        last_sabotage_attempt_time = EXCLUDED.last_sabotage_attempt_time;
     """
     try:
         # Convert complex types to JSON strings for psycopg2 if needed,
@@ -334,7 +344,8 @@ def save_player_data(user_id: int, data: dict) -> None:
                 stats_json,
                 data["total_income_earned"],
                 data["last_login_time"],
-                data["collection_count"]
+                data["collection_count"],
+                data["last_sabotage_attempt_time"]
             ))
         conn.commit()
         logger.debug(f"Successfully saved data for user {user_id}.")
@@ -394,7 +405,8 @@ def get_default_player_state(user_id: int) -> dict:
         },
         "total_income_earned": 0.0,
         "last_login_time": time.time(),
-        "collection_count": 0
+        "collection_count": 0,
+        "last_sabotage_attempt_time": 0.0
     }
 
 # --- Income Calculation (Uses GDP Factor) ---
