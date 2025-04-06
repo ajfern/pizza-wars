@@ -262,6 +262,116 @@ async def _process_upgrade(context: ContextTypes.DEFAULT_TYPE, user_id: int, sho
         else:
              await context.bot.send_message(chat_id=user_id, text=error_msg)
 
+# --- Scheduled Job Functions (Restore Definitions) ---
+async def generate_daily_challenges_job(context: ContextTypes.DEFAULT_TYPE):
+    """Scheduled job to generate daily challenges for all players in DB."""
+    logger.info("Running daily challenge generation job...")
+    try:
+        user_ids = game.get_all_user_ids()
+        if not user_ids:
+            logger.info("No players found in database for daily challenge generation.")
+            return
+        generated_count = 0
+        for user_id in user_ids:
+            try:
+                game.generate_new_challenges(user_id, 'daily')
+                generated_count += 1
+            except Exception as e:
+                logger.error(f"Error generating daily challenge for user {user_id}: {e}", exc_info=True)
+        logger.info(f"Daily challenge generation complete. Processed for {generated_count}/{len(user_ids)} users.")
+    except Exception as e:
+        logger.error(f"Failed to fetch user IDs for daily challenge job: {e}", exc_info=True)
+
+async def generate_weekly_challenges_job(context: ContextTypes.DEFAULT_TYPE):
+    """Scheduled job to generate weekly challenges for all players in DB."""
+    logger.info("Running weekly challenge generation job...")
+    try:
+        user_ids = game.get_all_user_ids()
+        if not user_ids:
+            logger.info("No players found in database for weekly challenge generation.")
+            return
+        generated_count = 0
+        for user_id in user_ids:
+            try:
+                game.generate_new_challenges(user_id, 'weekly')
+                generated_count += 1
+            except Exception as e:
+                logger.error(f"Error generating weekly challenge for user {user_id}: {e}", exc_info=True)
+        logger.info(f"Weekly challenge generation complete. Processed for {generated_count}/{len(user_ids)} users.")
+    except Exception as e:
+        logger.error(f"Failed to fetch user IDs for weekly challenge job: {e}", exc_info=True)
+
+async def update_location_performance_job(context: ContextTypes.DEFAULT_TYPE):
+    """Scheduled job to update location performance multipliers."""
+    logger.info("Running location performance update job...")
+    try:
+        game.update_location_performance()
+    except Exception as e:
+        logger.error(f"Error in update_location_performance_job: {e}", exc_info=True)
+
+# --- Sabotage Processing Helper (Restore Definition) --- #
+async def _process_sabotage(context: ContextTypes.DEFAULT_TYPE, attacker_user_id: int, target_user_id: int, shop_location: str):
+    """Handles the core logic: check target, roll chance, apply outcome, handle cost/cooldown."""
+    attacker_data = game.load_player_data(attacker_user_id)
+    if not attacker_data:
+        await context.bot.send_message(chat_id=attacker_user_id, text="Couldn't load your data to process sabotage outcome.")
+        return None # Indicate failure to save
+
+    attacker_cash = attacker_data.get("cash", 0)
+    sabotage_cost = round(game.SABOTAGE_BASE_COST + (attacker_cash * game.SABOTAGE_PCT_COST), 2)
+
+    target_data = game.load_player_data(target_user_id)
+    target_shop_display_name = shop_location
+    if target_data and shop_location in target_data.get("shops", {}):
+        target_shop_display_name = target_data["shops"][shop_location].get("custom_name", shop_location)
+
+    attempt_time = time.time()
+    if random.random() < game.SABOTAGE_SUCCESS_CHANCE:
+        # SUCCESS
+        logger.info(f"Sabotage SUCCESS by {attacker_user_id} against {target_user_id}'s {shop_location}")
+        shutdown_applied = game.apply_shop_shutdown(target_user_id, shop_location, game.SABOTAGE_DURATION_SECONDS)
+        if shutdown_applied:
+            await context.bot.send_message(chat_id=attacker_user_id, text=f"🐀 Success! Your agent planted the rat. {target_shop_display_name} shut down! No cost to you.")
+            try:
+                await context.bot.send_message(chat_id=target_user_id, text=f"🚨 Bad news, boss! Health inspector found a rat at {target_shop_display_name}! Shut down for 1 hour!")
+            except Exception as notify_err: logger.error(f"Failed to notify target {target_user_id} of sabotage: {notify_err}")
+        else:
+            await context.bot.send_message(chat_id=attacker_user_id, text=f"Agent found the shop ({target_shop_display_name}), but couldn't apply shutdown... Weird.")
+        attacker_data["last_sabotage_attempt_time"] = attempt_time
+    else:
+        # FAILURE
+        logger.warning(f"Sabotage FAILED by {attacker_user_id} against {target_user_id}")
+        if attacker_cash < sabotage_cost:
+             await context.bot.send_message(chat_id=attacker_user_id, text=f"Your agent failed, and you didn't even have the ${sabotage_cost:,.2f} to cover the bribe! Nothing happens.")
+             attacker_data["last_sabotage_attempt_time"] = attempt_time
+             return attacker_data # Return modified data to save cooldown
+
+        attacker_data["cash"] = attacker_cash - sabotage_cost
+        logger.info(f"Deducting sabotage cost ${sabotage_cost:,.2f} from attacker {attacker_user_id} due to failure.")
+        failure_base_message = f"Your crooked business attempt was found out! You had to pay a bribe of ${sabotage_cost:,.2f} to the press to keep it quiet."
+
+        if random.random() < game.SABOTAGE_BACKFIRE_CHANCE:
+            # BACKFIRE!
+            logger.warning(f"Sabotage BACKFIRED on attacker {attacker_user_id}!")
+            attacker_shops = attacker_data.get("shops", {})
+            shop_to_shutdown = game.get_top_earning_shop(attacker_shops)
+            if shop_to_shutdown:
+                game.apply_shop_shutdown(attacker_user_id, shop_to_shutdown, game.SABOTAGE_DURATION_SECONDS)
+                attacker_shop_display = attacker_data["shops"].get(shop_to_shutdown, {}).get("custom_name", shop_to_shutdown)
+                backfire_message = f"\n💥 To make matters worse, your agent ratted you out! Your own {attacker_shop_display} got shut down for an hour!"
+                logger.info(f"Sending sabotage backfire msg to {attacker_user_id}")
+                await context.bot.send_message(chat_id=attacker_user_id, text=failure_base_message + backfire_message)
+            else:
+                 no_shop_backfire_msg = failure_base_message + "\n💥 Your agent also ratted you out, but luckily you have no shops for them to shut down!"
+                 logger.info(f"Sending sabotage backfire (no shop) msg to {attacker_user_id}")
+                 await context.bot.send_message(chat_id=attacker_user_id, text=no_shop_backfire_msg)
+        else:
+            # Normal Failure
+            logger.info(f"Sending sabotage normal failure msg to {attacker_user_id}")
+            await context.bot.send_message(chat_id=attacker_user_id, text=failure_base_message)
+        attacker_data["last_sabotage_attempt_time"] = attempt_time
+
+    return attacker_data
 
 # --- Command Handlers ---
 
