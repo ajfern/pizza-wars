@@ -751,7 +751,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Add /boost here if/when implemented
         "/help - Show this command guide.\n\n"
         "<b>PvP Actions:</b>\n"
-        "/sabotage - Initiate sabotage attempt (Costs cash, high risk/reward!).\n\n"
+        "/sabotage - View targets & costs/risks for sabotage attempt.\n\n"
         "<i>Now get back to building that empire!</i>"
     )
     await update.message.reply_html(help_text)
@@ -1049,8 +1049,7 @@ SABOTAGE_DURATION_SECONDS = 3600
 SABOTAGE_COOLDOWN_SECONDS = 900
 
 async def sabotage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Starts the sabotage process by showing potential targets."""
-    logger.info("--- sabotage_command ENTERED ---") # <<< Add entry log
+    """Starts the sabotage process by showing potential targets and explaining risks."""
     user = update.effective_user
     if not user:
         await update.message.reply_text("Need user info to start sabotage.")
@@ -1058,15 +1057,13 @@ async def sabotage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update_player_display_name(user.id, user)
     logger.info(f"User {user.id} initiated sabotage command.")
 
-    attacker_user_id = user.id # Defined earlier
-
-    # --- Load Attacker Data --- #
+    attacker_user_id = user.id
     attacker_data = game.load_player_data(attacker_user_id)
     if not attacker_data:
-        await update.message.reply_text("Couldn't load your data to initiate sabotage.")
+        await update.message.reply_text("Couldn't load your data.")
         return
 
-    # --- Check Cooldown --- #
+    # --- Check Cooldown First --- #
     now = time.time()
     last_attempt_time = attacker_data.get("last_sabotage_attempt_time", 0.0)
     time_since_last = now - last_attempt_time
@@ -1076,47 +1073,49 @@ async def sabotage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
          return
     # --- End Cooldown Check --- #
 
-    if not context.args:
-        # --- Show Target List --- #
-        # Fetch top players by cash
-        potential_targets = game.get_cash_leaderboard_data(limit=20)
-        # Filter out the user themselves
-        valid_targets = [(pid, name, cash) for pid, name, cash in potential_targets if pid != user.id]
+    # Calculate potential cost for explanation
+    attacker_cash = attacker_data.get("cash", 0)
+    potential_cost = round(SABOTAGE_BASE_COST + (attacker_cash * SABOTAGE_PCT_COST), 2)
 
+    # Show Target List
+    try:
+        potential_targets = game.get_cash_leaderboard_data(limit=20)
+        valid_targets = [(pid, name, cash) for pid, name, cash in potential_targets if pid != user.id]
         if not valid_targets:
-            await update.message.reply_text("No other players found on the cash leaderboard to target right now!")
+            await update.message.reply_text("No valid targets found on the cash leaderboard right now!")
             return
 
         keyboard = []
         for i, (target_id, display_name, cash_amount) in enumerate(valid_targets):
-            rank = i + 1 # Rank among potential targets shown
+            rank = i + 1
             name = display_name or f"Player {target_id}"
             if len(name) > 20: name = name[:17] + "..."
-            # Button shows Rank, Name, Cash
             button_text = f"{rank}. {name} (${cash_amount:,.0f})"
-            # Callback data includes target ID
             keyboard.append([InlineKeyboardButton(button_text, callback_data=f"sabotage_{target_id}")])
-            # One button per row for clarity
 
-        if not keyboard:
-             await update.message.reply_text("No valid targets found (excluding yourself).")
+        if not keyboard: # Should be caught by valid_targets check, but safety
+             await update.message.reply_text("No valid targets found.")
              return
 
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            "🐀 Choose a rival to send your agent after (based on cash leaderboard):",
-            reply_markup=reply_markup
+        # --- Explanation Message --- #
+        explanation = (
+            f"⚠️ **Sabotage Warning!** ⚠️\n"
+            f"Attempting sabotage currently costs: **${potential_cost:,.2f}** (Cost only applies *if you fail*).\n\n"
+            f"<b>Success ({int(SABOTAGE_SUCCESS_CHANCE * 100)}%):</b> Target's top shop shut down for {int(SABOTAGE_DURATION_SECONDS / 60)} mins.\n"
+            f"<b>Failure ({int((1 - SABOTAGE_SUCCESS_CHANCE) * 100)}%):</b> You lose the ${potential_cost:,.2f} cost.\n"
+            f"  - <b>Backfire Chance ({int(SABOTAGE_BACKFIRE_CHANCE * 100)}% of failures):</b> Your *own* top shop gets shut down too!\n\n"
+            f"Cooldown after attempt: {int(SABOTAGE_COOLDOWN_SECONDS / 60)} minutes.\n\n"
+            f"Choose your target wisely:"
         )
-        return # Wait for callback
+        await update.message.reply_html(explanation, reply_markup=reply_markup)
 
-    # --- Direct Target Input (Keep or Remove?) --- #
-    # For simplicity, let's REMOVE direct targeting by ID/Name via command args
-    # and force users to use the button selection.
-    await update.message.reply_text("Use `/sabotage` without arguments to choose a target from the list.")
+    except Exception as e:
+        logger.error(f"Error preparing sabotage target list: {e}", exc_info=True)
+        await update.message.reply_text("Couldn't fetch potential targets right now.")
 
-# --- Sabotage Choice Callback Handler --- #
+# --- Sabotage Choice Callback Handler (Remove Cooldown Check Here) --- #
 async def sabotage_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles the button press selecting a sabotage target."""
     query = update.callback_query
     user = query.from_user
     await query.answer()
@@ -1133,45 +1132,23 @@ async def sabotage_choice_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text("Can't sabotage yourself!")
         return
 
-    # --- Check Cooldown AGAIN (important!) --- #
-    attacker_data = game.load_player_data(attacker_user_id)
-    if not attacker_data:
-        await query.edit_message_text("Error loading your data.")
-        return
-    now = time.time()
-    last_attempt_time = attacker_data.get("last_sabotage_attempt_time", 0.0)
-    time_since_last = now - last_attempt_time
-    if time_since_last < SABOTAGE_COOLDOWN_SECONDS:
-         remaining_cooldown = timedelta(seconds=int(SABOTAGE_COOLDOWN_SECONDS - time_since_last))
-         await query.edit_message_text(f"Your agents are still laying low! Sabotage available again in {str(remaining_cooldown).split('.')[0]}.")
-         return
-    # --- End Cooldown Check --- #
-
     target_name = game.find_display_name_by_id(target_user_id) or f"Player {target_user_id}"
-    await query.edit_message_text(f"Sending agent after {target_name}... Wish them luck (or not!).")
+    await query.edit_message_text(f"Sending agent after {target_name}... Attempting sabotage!") # Updated message
     logger.info(f"User {attacker_user_id} confirmed sabotage attempt against {target_user_id} ('{target_name}')")
 
-    # --- Update Attacker's Last Attempt Time IMMEDIATELY --- #
-    attacker_data["last_sabotage_attempt_time"] = now
-    game.save_player_data(attacker_user_id, attacker_data) # Save cooldown time first
-    logger.info(f"Updated last sabotage time for {attacker_user_id}")
-    # --- End Cooldown Update --- #
-
-    # Call the helper to do the actual work
+    # Call the helper
     await _process_sabotage(context, attacker_user_id, target_user_id)
 
-# --- Sabotage Processing Helper (Updated Failure Logic) --- #
+# --- Sabotage Processing Helper (Revised Cost/Cooldown Logic) --- #
 async def _process_sabotage(context: ContextTypes.DEFAULT_TYPE, attacker_user_id: int, target_user_id: int):
-    # Load Attacker Data & Check Cost
+    # Load Attacker Data (Needed for cash check ONLY on failure now)
     attacker_data = game.load_player_data(attacker_user_id)
     if not attacker_data:
-        await context.bot.send_message(chat_id=attacker_user_id, text="Couldn't load your data to initiate sabotage.")
+        await context.bot.send_message(chat_id=attacker_user_id, text="Couldn't load your data to process sabotage outcome.")
         return
     attacker_cash = attacker_data.get("cash", 0)
+    # Calculate cost again here, in case cash changed since buttons were shown
     sabotage_cost = round(SABOTAGE_BASE_COST + (attacker_cash * SABOTAGE_PCT_COST), 2)
-    if attacker_cash < sabotage_cost:
-        await context.bot.send_message(chat_id=attacker_user_id, text=f"You needed ${sabotage_cost:,.2f} to send your agent, but you only had ${attacker_cash:,.2f} when you clicked! Mission aborted.")
-        return
 
     # Load Target Data
     target_data = game.load_player_data(target_user_id)
@@ -1180,54 +1157,67 @@ async def _process_sabotage(context: ContextTypes.DEFAULT_TYPE, attacker_user_id
         await context.bot.send_message(chat_id=attacker_user_id, text=f"Couldn't find player {target_display} anymore.")
         return
 
-    # --- Deduct Initial Cost from Attacker & Save Cooldown --- #
-    attacker_data["cash"] = attacker_cash - sabotage_cost
-    attacker_data["last_sabotage_attempt_time"] = time.time() # Cooldown starts now
-    logger.info(f"Deducting sabotage cost ${sabotage_cost:,.2f} and setting cooldown for attacker {attacker_user_id}")
-    game.save_player_data(attacker_user_id, attacker_data) # Save attacker state BEFORE outcome
-    # --- End Cost/Cooldown Update --- #
-
     # Determine Target Shop
     target_shops = target_data.get("shops", {})
     shop_to_sabotage = game.get_top_earning_shop(target_shops)
-
     if not shop_to_sabotage:
-        await context.bot.send_message(chat_id=attacker_user_id, text="Your agent reports the target has no shops worth sabotaging. Cost was already spent!")
-        return # Attacker already paid
+        await context.bot.send_message(chat_id=attacker_user_id, text="Your agent reports the target has no shops worth sabotaging. No cost incurred.")
+        # Update cooldown ONLY if target had no shops
+        attacker_data["last_sabotage_attempt_time"] = time.time()
+        game.save_player_data(attacker_user_id, attacker_data)
+        return
 
-    # Roll for Success
+    # --- Roll for Success --- #
+    attempt_time = time.time() # Record time for cooldown
     if random.random() < SABOTAGE_SUCCESS_CHANCE:
         # --- Success --- #
         logger.info(f"Sabotage SUCCESS by {attacker_user_id} against {target_user_id}'s {shop_to_sabotage}")
         shutdown_applied = game.apply_shop_shutdown(target_user_id, shop_to_sabotage, SABOTAGE_DURATION_SECONDS)
         if shutdown_applied:
-            await context.bot.send_message(chat_id=attacker_user_id, text=f"🐀 Success! Your agent planted the rat. {shop_to_sabotage} is shut down for a while! (Cost: ${sabotage_cost:,.2f})")
+            await context.bot.send_message(chat_id=attacker_user_id, text=f"🐀 Success! Your agent planted the rat. {shop_to_sabotage} shut down! No cost to you.")
             try:
                 target_shop_display = target_data["shops"][shop_to_sabotage].get("custom_name", shop_to_sabotage)
-                await context.bot.send_message(chat_id=target_user_id, text=f"🚨 Bad news, boss! A health inspector found a rat at your {target_shop_display} shop! It's shut down for cleaning for the next hour!")
+                await context.bot.send_message(chat_id=target_user_id, text=f"🚨 Bad news, boss! Health inspector found a rat at {target_shop_display}! Shut down for 1 hour!")
             except Exception as notify_err: logger.error(f"Failed to notify target {target_user_id} of sabotage: {notify_err}")
         else:
-            await context.bot.send_message(chat_id=attacker_user_id, text=f"Agent found the shop, but couldn't apply shutdown... Cost: ${sabotage_cost:,.2f}.")
+            await context.bot.send_message(chat_id=attacker_user_id, text=f"Agent found the shop, but couldn't apply shutdown... No cost incurred.")
+        # Set cooldown on success
+        attacker_data["last_sabotage_attempt_time"] = attempt_time
+        game.save_player_data(attacker_user_id, attacker_data)
     else:
         # --- Failure --- #
         logger.warning(f"Sabotage FAILED by {attacker_user_id} against {target_user_id}")
+        # --- Deduct Cost NOW --- #
+        if attacker_cash < sabotage_cost:
+             # Double check cost again, though unlikely to change drastically
+             await context.bot.send_message(chat_id=attacker_user_id, text=f"Mission failed AND you couldn't cover the cost (${sabotage_cost:,.2f})! Nothing happens.")
+             attacker_data["last_sabotage_attempt_time"] = attempt_time # Still apply cooldown
+             game.save_player_data(attacker_user_id, attacker_data)
+             return
+
+        attacker_data["cash"] = attacker_cash - sabotage_cost
+        logger.info(f"Deducting sabotage cost ${sabotage_cost:,.2f} from attacker {attacker_user_id} due to failure.")
+        # --- End Cost Deduction --- #
+
+        # Check for Backfire
         if random.random() < SABOTAGE_BACKFIRE_CHANCE:
             # --- BACKFIRE! --- #
             logger.warning(f"Sabotage BACKFIRED on attacker {attacker_user_id}!")
             attacker_shops = attacker_data.get("shops", {})
             shop_to_shutdown = game.get_top_earning_shop(attacker_shops)
             if shop_to_shutdown:
-                # Apply shutdown to attacker's shop (re-use the function)
                 game.apply_shop_shutdown(attacker_user_id, shop_to_shutdown, SABOTAGE_DURATION_SECONDS)
                 attacker_shop_display = attacker_data["shops"].get(shop_to_shutdown, {}).get("custom_name", shop_to_shutdown)
-                await context.bot.send_message(chat_id=attacker_user_id, text=f"💥 Ouch! Your agent turned informant! Your own {attacker_shop_display} got shut down! (Cost: ${sabotage_cost:,.2f})")
+                await context.bot.send_message(chat_id=attacker_user_id, text=f"💥 BACKFIRE! Agent ratted you out! Your own {attacker_shop_display} got shut down! (Cost: ${sabotage_cost:,.2f})")
             else:
-                 # Attacker has no shops to shut down?
-                 await context.bot.send_message(chat_id=attacker_user_id, text=f"💥 Ouch! Your agent turned informant! Luckily you have no shops for them to shut down, but you still paid ${sabotage_cost:,.2f}.")
+                 await context.bot.send_message(chat_id=attacker_user_id, text=f"💥 BACKFIRE! Agent ratted you out! Luckily you had no shops to shut down. (Cost: ${sabotage_cost:,.2f})")
         else:
             # --- Normal Failure (Agent Caught) --- #
-             await context.bot.send_message(chat_id=attacker_user_id, text=f"🤦‍♂️ Your agent got caught! Mission failed. (Cost: ${sabotage_cost:,.2f})")
-             # Optional target notification could go here
+             await context.bot.send_message(chat_id=attacker_user_id, text=f"🤦‍♂️ Agent caught! Mission failed. (Cost: ${sabotage_cost:,.2f})")
+
+        # Save attacker state (reduced cash, cooldown)
+        attacker_data["last_sabotage_attempt_time"] = attempt_time
+        game.save_player_data(attacker_user_id, attacker_data)
 
 def main() -> None:
     """Start the bot and scheduler."""
