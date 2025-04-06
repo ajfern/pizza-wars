@@ -359,52 +359,57 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user = update.effective_user
     if not user:
         return
-    await update_player_display_name(user.id, user)
-    logger.info(f"User {user.id} requested status.")
+    # Wrap main logic in try-except
+    try:
+        await update_player_display_name(user.id, user)
+        logger.info(f"User {user.id} requested status.")
 
-    # --- Parse Sort Argument --- #
-    sort_key = 'name' # Default sort
-    if context.args:
-        arg_lower = context.args[0].lower()
-        if arg_lower.startswith('s:') or arg_lower.startswith('sort:'):
-            potential_key = arg_lower.split(':', 1)[1]
-            if potential_key in ['name', 'level', 'cost', 'upgrade_cost']:
-                sort_key = potential_key
-                logger.info(f"User {user.id} requested status sorted by: {sort_key}")
-            else:
-                 await update.message.reply_text(f"Unknown sort key '{potential_key}'. Use 'name', 'level', or 'cost'.")
-                 # Defaulting to name sort
-                 sort_key = 'name'
-    # --- End Sort Argument --- #
+        # --- Parse Sort Argument --- #
+        sort_key = 'name' # Default sort
+        if context.args:
+            arg_lower = context.args[0].lower()
+            if arg_lower.startswith('s:') or arg_lower.startswith('sort:'):
+                potential_key = arg_lower.split(':', 1)[1]
+                if potential_key in ['name', 'level', 'cost', 'upgrade_cost']:
+                    sort_key = potential_key
+                    logger.info(f"User {user.id} requested status sorted by: {sort_key}")
+                else:
+                     await update.message.reply_text(f"Unknown sort key '{potential_key}'. Use 'name', 'level', or 'cost'.")
+                     sort_key = 'name' # Default back
+        # --- End Sort Argument --- #
 
-    player_data = game.load_player_data(user.id)
-    if not player_data:
-         await update.message.reply_text("Couldn't load your data, boss. Try /start?")
-         return
-    status_message = game.format_status(player_data, sort_by=sort_key)
+        player_data = game.load_player_data(user.id)
+        if not player_data:
+             await update.message.reply_text("Couldn't load your data, boss. Try /start?")
+             return
+        status_message = game.format_status(player_data, sort_by=sort_key)
 
-    # --- Create CORRECT Action Buttons --- #
-    keyboard = [
-        [
-            InlineKeyboardButton("💰 Collect Income", callback_data="main_collect"),
-            InlineKeyboardButton("⬆️ Upgrade Shop", callback_data="main_upgrade"),
-        ],
-        [
-            InlineKeyboardButton("🗺️ Expand Empire", callback_data="main_expand"),
-            InlineKeyboardButton("🎯 View Challenges", callback_data="main_challenges"),
-        ],
-        [
-            InlineKeyboardButton("🏆 Leaderboard", callback_data="main_leaderboard"),
-            InlineKeyboardButton("🍕 Buy Coins", callback_data="main_buycoins"),
-        ],
-        [
-            InlineKeyboardButton("❓ Help Guide", callback_data="main_help"),
+        # --- Create CORRECT Action Buttons --- #
+        keyboard = [
+            [
+                InlineKeyboardButton("💰 Collect Income", callback_data="main_collect"),
+                InlineKeyboardButton("⬆️ Upgrade Shop", callback_data="main_upgrade"),
+            ],
+            [
+                InlineKeyboardButton("🗺️ Expand Empire", callback_data="main_expand"),
+                InlineKeyboardButton("🎯 View Challenges", callback_data="main_challenges"),
+            ],
+            [
+                InlineKeyboardButton("🏆 Leaderboard", callback_data="main_leaderboard"),
+                InlineKeyboardButton("🍕 Buy Coins", callback_data="main_buycoins"),
+            ],
+            [
+                InlineKeyboardButton("❓ Help Guide", callback_data="main_help"),
+            ]
         ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    # --- End Action Buttons --- #
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        # --- End Action Buttons --- #
 
-    await update.message.reply_html(status_message, reply_markup=reply_markup)
+        await update.message.reply_html(status_message, reply_markup=reply_markup)
+
+    except Exception as e:
+        logger.error(f"ERROR in status_command for user {user.id}: {e}", exc_info=True)
+        await update.message.reply_text("Bada bing! Couldn't fetch your status right now.")
 
 async def collect_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
