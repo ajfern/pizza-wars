@@ -1130,64 +1130,45 @@ async def sabotage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         logger.error(f"Error preparing sabotage target list: {e}", exc_info=True)
         await update.message.reply_text("Couldn't fetch potential targets right now.")
 
-# --- Sabotage Choice Callback Handler (Select Target Player) --- #
+# --- Sabotage Choice Callback Handler --- #
 async def sabotage_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     user = query.from_user
     await query.answer()
-
     try:
         target_user_id = int(query.data.split("sabotage_", 1)[1])
     except (IndexError, ValueError):
         logger.warning(f"Invalid sabotage callback data: {query.data}")
         await query.edit_message_text("Invalid target selection.")
         return
-
     attacker_user_id = user.id
     if target_user_id == attacker_user_id:
-        await query.edit_message_text("Can't sabotage yourself!")
-        return
-
-    # Load target data to get their shops
+        await query.edit_message_text("Can't sabotage yourself!"); return
     target_data = game.load_player_data(target_user_id)
     target_name = target_data.get("display_name") or f"Player {target_user_id}"
     target_shops = target_data.get("shops", {})
-
     if not target_data or not target_shops:
-        await query.edit_message_text(f"{target_name} has no shops to sabotage!")
-        return
-
-    # --- Show Shop Selection Buttons --- #
+        await query.edit_message_text(f"{target_name} has no shops to sabotage!"); return
     keyboard = []
-    shop_list = sorted(target_shops.items(), key=lambda item: item[1].get('level', 1), reverse=True) # Sort by level desc
-
+    shop_list = sorted(target_shops.items(), key=lambda item: item[1].get('level', 1), reverse=True)
     for location, shop_data in shop_list:
         custom_name = shop_data.get("custom_name", location)
         level = shop_data.get("level", 1)
         display_name = f"{custom_name} ({location})" if custom_name != location else location
-        # Callback data format: sabotage_shop_{target_user_id}_{location_name}
         callback_data = f"sabo_shop_{target_user_id}_{location}"
         keyboard.append([InlineKeyboardButton(f"{display_name} (Lvl {level})", callback_data=callback_data)])
-
     if not keyboard:
-        await query.edit_message_text(f"{target_name} seems to have no valid shops.")
-        return
-
+        await query.edit_message_text(f"{target_name} seems to have no valid shops."); return
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(
-        f"Targeting {target_name}. Which of their shops should the agent hit?",
-        reply_markup=reply_markup
-    )
+    await query.edit_message_text(f"Targeting {target_name}. Which shop should the agent hit?", reply_markup=reply_markup)
 
 # --- Sabotage Shop Choice Callback Handler --- #
 async def sabotage_shop_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the button press selecting the specific shop to sabotage."""
     query = update.callback_query
-    user = query.from_user
+    user = query.from_user # This is the ATTACKER
     logger.info(f"--- sabotage_shop_choice_callback ENTERED by user {user.id} ---")
     await query.answer()
-
-    # Extract target user id and shop location from callback data
     try:
         parts = query.data.split('_')
         if len(parts) < 4 or parts[0] != 'sabo' or parts[1] != 'shop': raise IndexError
@@ -1198,9 +1179,7 @@ async def sabotage_shop_choice_callback(update: Update, context: ContextTypes.DE
     except (IndexError, ValueError):
         logger.warning(f"Invalid sabotage shop choice callback data: {query.data}")
         await query.edit_message_text("Invalid shop choice."); return
-
     attacker_user_id = user.id
-    # Check cooldown
     attacker_data = game.load_player_data(attacker_user_id)
     if not attacker_data:
         await query.edit_message_text("Error loading your data."); return
@@ -1209,16 +1188,29 @@ async def sabotage_shop_choice_callback(update: Update, context: ContextTypes.DE
     time_since_last = now - last_attempt_time
     if time_since_last < game.SABOTAGE_COOLDOWN_SECONDS:
          remaining_cooldown = timedelta(seconds=int(game.SABOTAGE_COOLDOWN_SECONDS - time_since_last))
-         await query.edit_message_text(f"Your agents are still laying low! Sabotage available again in {str(remaining_cooldown).split('.')[0]}."); return
-
+         await query.edit_message_text(f"Agents laying low! Cooldown: {str(remaining_cooldown).split('.')[0]}."); return
     target_name = game.find_display_name_by_id(target_user_id) or f"Player {target_user_id}"
-    # Use the new helper function from game.py
     shop_display = game.get_shop_custom_name(target_user_id, shop_location) or shop_location
     await query.edit_message_text(f"Sending agent to hit {shop_display} at {target_name}'s place... Fingers crossed!")
     logger.info(f"User {attacker_user_id} confirmed sabotage attempt against {target_user_id}'s shop: {shop_location}")
     await _process_sabotage(context, attacker_user_id, target_user_id, shop_location)
 
-# --- Main Menu Callback Handler (Performs Actions) --- #
+# --- Upgrade Shop Choice Callback Handler --- #
+async def upgrade_shop_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles the button press selecting the specific shop to upgrade."""
+    query = update.callback_query
+    user = query.from_user
+    logger.info(f"--- upgrade_shop_choice_callback ENTERED by user {user.id} ---")
+    await query.answer()
+    try:
+        shop_location = query.data.split("upgrade_shop_", 1)[1]
+        logger.info(f"Parsed shop_location: {shop_location} for user {user.id}")
+    except IndexError:
+        logger.warning(f"Invalid upgrade shop choice callback data: {query.data}")
+        await query.edit_message_text("Invalid shop choice."); return
+    await _process_upgrade(context, user.id, shop_location, query=query)
+
+# --- Main Menu Callback Handler --- #
 async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles button presses from the main action keyboard, performs the action."""
     query = update.callback_query
