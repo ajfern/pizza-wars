@@ -145,13 +145,22 @@ async def update_player_display_name(user_id: int, user: "telegram.User | None")
 # --- NEW Helper to show upgrade options ---
 async def _show_upgrade_options(update_or_query: Update | CallbackQuery, context: ContextTypes.DEFAULT_TYPE):
     """Fetches player shops and displays them as buttons for upgrading."""
-    user = update_or_query.from_user
-    chat_id = update_or_query.message.chat_id if hasattr(update_or_query, 'message') else None
-    if not chat_id and hasattr(update_or_query, 'chat_instance'): # Fallback for query without message?
-        chat_id = user.id # DM
-    if not chat_id:
-         logger.warning("_show_upgrade_options could not determine chat_id")
-         return
+    # Correctly get user and chat_id based on input type
+    if isinstance(update_or_query, CallbackQuery):
+        query = update_or_query
+        user = query.from_user
+        chat_id = query.message.chat_id if query.message else user.id # Fallback for safety
+    elif isinstance(update_or_query, Update):
+        update = update_or_query
+        user = update.effective_user
+        chat_id = update.effective_chat.id if update.effective_chat else None
+    else:
+        logger.error(f"_show_upgrade_options received unexpected type: {type(update_or_query)}")
+        return
+
+    if not user or not chat_id:
+        logger.warning(f"_show_upgrade_options could not determine user or chat_id ({user=}, {chat_id=})")
+        return
 
     logger.debug(f"Showing upgrade options for user {user.id}")
     player_data = game.load_player_data(user.id)
