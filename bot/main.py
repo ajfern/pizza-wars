@@ -333,8 +333,8 @@ async def _process_sabotage(context: ContextTypes.DEFAULT_TYPE, attacker_user_id
         if shutdown_applied:
             await context.bot.send_message(chat_id=attacker_user_id, text=f"🐀 Success! Your agent planted the rat. {target_shop_display_name} shut down! No cost to you.")
             try:
-                await context.bot.send_message(chat_id=target_user_id, text=f"🚨 Bad news, boss! Health inspector found a rat at {target_shop_display_name}! Shut down for 1 hour!")
-            except Exception as notify_err: logger.error(f"Failed to notify target {target_user_id} of sabotage: {notify_err}")
+                await context.bot.send_message(chat_id=target_user_id, text=f"🚨 Bad news, boss! A health inspector (sent by a rival?) found a rat at {target_shop_display_name}! Shut down for 1 hour!")
+            except Exception as notify_err: logger.error(f"Failed to notify target {target_user_id} of successful sabotage: {notify_err}")
         else:
             await context.bot.send_message(chat_id=attacker_user_id, text=f"Agent found the shop ({target_shop_display_name}), but couldn't apply shutdown... Weird.")
         attacker_data["last_sabotage_attempt_time"] = attempt_time
@@ -369,6 +369,10 @@ async def _process_sabotage(context: ContextTypes.DEFAULT_TYPE, attacker_user_id
             # Normal Failure
             logger.info(f"Sending sabotage normal failure msg to {attacker_user_id}")
             await context.bot.send_message(chat_id=attacker_user_id, text=failure_base_message)
+            try: # Notify Target of FAILED attempt
+                 attacker_name = attacker_data.get("display_name", f"Player {attacker_user_id}")
+                 await context.bot.send_message(chat_id=target_user_id, text=f"Word on the street is {attacker_name} sent a goon after your {target_shop_display_name} shop, but the cops scared 'em off. Nothin' to worry about... probably.")
+            except Exception as notify_err: logger.error(f"Failed to notify target {target_user_id} of failed sabotage: {notify_err}")
         attacker_data["last_sabotage_attempt_time"] = attempt_time
 
     return attacker_data
@@ -761,11 +765,7 @@ async def expansion_choice_callback(update: Update, context: ContextTypes.DEFAUL
     await _process_expansion(query, context, user.id, target_location)
     # --- Show Status Again AFTER processing --- #
     logger.debug(f"Expansion attempt processed for {user.id}, showing status.")
-    status_update = query.message or update
-    if status_update:
-        await status_command(status_update, context)
-    else:
-        logger.warning("Could not get message object to show status after expansion choice.")
+    await _send_status_update(query.message.chat_id, user.id, context)
 
 async def challenges_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -1060,7 +1060,7 @@ async def mafia_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await check_and_notify_achievements(user.id, context)
         # --- Show Status Again --- #
         logger.debug("Mafia event resolved, showing status again.")
-        await status_command(query.message, context)
+        await _send_status_update(query.message.chat_id, user.id, context)
 
     except Exception as e:
         logger.error(f"Error processing Mafia callback outcome for {user.id}: {e}", exc_info=True)
@@ -1314,15 +1314,13 @@ async def sabotage_shop_choice_callback(update: Update, context: ContextTypes.DE
     shop_display = game.get_shop_custom_name(target_user_id, shop_location) or shop_location
     await query.edit_message_text(f"Sending agent to hit {shop_display} at {target_name}'s place... Fingers crossed!")
     logger.info(f"User {attacker_user_id} confirmed sabotage attempt against {target_user_id}'s shop: {shop_location}")
-    await _process_sabotage(context, attacker_user_id, target_user_id, shop_location)
+    modified_attacker_data = await _process_sabotage(context, attacker_user_id, target_user_id, shop_location)
+    if modified_attacker_data:
+        game.save_player_data(attacker_user_id, modified_attacker_data)
+        logger.info(f"Saved attacker data for {attacker_user_id} after sabotage attempt.")
     # --- Show Status Again AFTER processing --- #
     logger.debug(f"Sabotage attempt processed for {attacker_user_id}, showing status.")
-    # Need to get a valid Update object for status command if called from query
-    status_update = query.message or update # Fallback if message is gone
-    if status_update:
-         await status_command(status_update, context)
-    else:
-         logger.warning("Could not get message object to show status after sabotage shop choice.")
+    await _send_status_update(query.message.chat_id, attacker_user_id, context)
 
 # --- Upgrade Shop Choice Callback Handler --- #
 async def upgrade_shop_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1340,11 +1338,7 @@ async def upgrade_shop_choice_callback(update: Update, context: ContextTypes.DEF
     await _process_upgrade(context, user.id, shop_location, query=query)
     # --- Show Status Again AFTER processing --- #
     logger.debug(f"Upgrade attempt processed for {user.id}, showing status.")
-    status_update = query.message or update
-    if status_update:
-         await status_command(status_update, context)
-    else:
-         logger.warning("Could not get message object to show status after upgrade shop choice.")
+    await _send_status_update(query.message.chat_id, user.id, context)
 
 # --- Main Menu Callback Handler --- #
 async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
