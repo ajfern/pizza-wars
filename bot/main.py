@@ -1163,132 +1163,14 @@ async def sabotage_choice_callback(update: Update, context: ContextTypes.DEFAULT
         reply_markup=reply_markup
     )
 
-# --- New Sabotage Shop Choice Callback Handler --- #
-async def sabotage_shop_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles the button press selecting the specific shop to sabotage."""
-    query = update.callback_query
-    user = query.from_user # This is the ATTACKER
-    await query.answer()
-
-    # Extract target user id and shop location from callback data
-    try:
-        # Format: sabo_shop_{target_user_id}_{location_name}
-        parts = query.data.split('_')
-        target_user_id = int(parts[2])
-        shop_location = parts[3]
-        # Re-join if location name had underscores (though unlikely with current names)
-        if len(parts) > 4:
-             shop_location = "_".join(parts[3:])
-
-    except (IndexError, ValueError):
-        logger.warning(f"Invalid sabotage shop choice callback data: {query.data}")
-        await query.edit_message_text("Invalid shop choice.")
-        return
-
-    attacker_user_id = user.id
-
-    # Check cooldown (important here before processing)
-    attacker_data = game.load_player_data(attacker_user_id)
-    if not attacker_data:
-        await query.edit_message_text("Error loading your data.")
-        return
-    now = time.time()
-    last_attempt_time = attacker_data.get("last_sabotage_attempt_time", 0.0)
-    time_since_last = now - last_attempt_time
-    if time_since_last < game.SABOTAGE_COOLDOWN_SECONDS:
-         remaining_cooldown = timedelta(seconds=int(game.SABOTAGE_COOLDOWN_SECONDS - time_since_last))
-         await query.edit_message_text(f"Your agents are still laying low! Sabotage available again in {str(remaining_cooldown).split('.')[0]}.")
-         return
-
-    target_name = game.find_display_name_by_id(target_user_id) or f"Player {target_user_id}"
-    await query.edit_message_text(f"Sending agent to hit {shop_location} at {target_name}'s place... Fingers crossed!")
-    logger.info(f"User {attacker_user_id} confirmed sabotage attempt against {target_user_id}'s shop: {shop_location}")
-
-    # Call the processing helper with the chosen shop
-    await _process_sabotage(context, attacker_user_id, target_user_id, shop_location)
-
-# --- Sabotage Processing Helper (Takes target shop, Revised Cost/Cooldown/Backfire Logic) --- #
-async def _process_sabotage(context: ContextTypes.DEFAULT_TYPE, attacker_user_id: int, target_user_id: int, shop_location: str):
-    """Handles the core logic of executing a sabotage attempt against a specific shop."""
-    # Load Attacker Data (needed for cash check on failure & final save)
-    attacker_data = game.load_player_data(attacker_user_id)
-    if not attacker_data:
-        await context.bot.send_message(chat_id=attacker_user_id, text="Couldn't load your data to process sabotage outcome.")
-        return
-
-    # Calculate cost
-    attacker_cash = attacker_data.get("cash", 0)
-    sabotage_cost = round(SABOTAGE_BASE_COST + (attacker_cash * SABOTAGE_PCT_COST), 2)
-
-    # Load Target Data (just to get shop custom name for notifications)
-    target_data = game.load_player_data(target_user_id)
-    target_shop_display_name = shop_location # Fallback
-    if target_data and shop_location in target_data.get("shops", {}):
-        target_shop_display_name = target_data["shops"][shop_location].get("custom_name", shop_location)
-
-    # --- Roll for Success --- #
-    attempt_time = time.time() # Record time for cooldown regardless of outcome
-    if random.random() < SABOTAGE_SUCCESS_CHANCE: # Success (40%)?
-        # --- Success --- #
-        logger.info(f"Sabotage SUCCESS by {attacker_user_id} against {target_user_id}'s {shop_location}")
-        shutdown_applied = game.apply_shop_shutdown(target_user_id, shop_location, SABOTAGE_DURATION_SECONDS)
-        if shutdown_applied:
-            await context.bot.send_message(chat_id=attacker_user_id, text=f"🐀 Success! Your agent planted the rat. {target_shop_display_name} shut down! No cost to you.")
-            try:
-                await context.bot.send_message(chat_id=target_user_id, text=f"🚨 Bad news, boss! Health inspector found a rat at {target_shop_display_name}! Shut down for 1 hour!")
-            except Exception as notify_err: logger.error(f"Failed to notify target {target_user_id} of sabotage: {notify_err}")
-        else:
-            await context.bot.send_message(chat_id=attacker_user_id, text=f"Agent found the shop ({target_shop_display_name}), but couldn't apply shutdown... Weird.")
-        # Set cooldown on success
-        attacker_data["last_sabotage_attempt_time"] = attempt_time
-        game.save_player_data(attacker_user_id, attacker_data)
-
-    else:
-        # --- Failure (60%) --- #
-        logger.warning(f"Sabotage FAILED by {attacker_user_id} against {target_user_id}")
-
-        # --- Calculate and Deduct Cost NOW --- #
-        if attacker_cash < sabotage_cost:
-             await context.bot.send_message(chat_id=attacker_user_id, text=f"Your agent failed, and you didn't even have the ${sabotage_cost:,.2f} to cover the bribe! Nothing happens, but maybe count your blessings?")
-             attacker_data["last_sabotage_attempt_time"] = attempt_time # Still apply cooldown
-             game.save_player_data(attacker_user_id, attacker_data)
-             return
-
-        attacker_data["cash"] = attacker_cash - sabotage_cost
-        logger.info(f"Deducting sabotage cost ${sabotage_cost:,.2f} from attacker {attacker_user_id} due to failure.")
-        # --- End Cost Deduction --- #
-
-        # Updated Failure Base Message
-        failure_base_message = f"Your crooked business attempt was found out! You had to pay a bribe of ${sabotage_cost:,.2f} to the press to keep it quiet."
-
-        # Check for Backfire (10% of failures)
-        if random.random() < SABOTAGE_BACKFIRE_CHANCE:
-            # --- BACKFIRE! --- #
-            logger.warning(f"Sabotage BACKFIRED on attacker {attacker_user_id}!")
-            attacker_shops = attacker_data.get("shops", {})
-            shop_to_shutdown = game.get_top_earning_shop(attacker_shops) # Still find attacker's TOP shop
-            if shop_to_shutdown:
-                game.apply_shop_shutdown(attacker_user_id, shop_to_shutdown, SABOTAGE_DURATION_SECONDS)
-                attacker_shop_display = attacker_data["shops"].get(shop_to_shutdown, {}).get("custom_name", shop_to_shutdown)
-                backfire_message = f"\n💥 To make matters worse, your agent ratted you out! Your own {attacker_shop_display} got shut down for an hour!"
-                await context.bot.send_message(chat_id=attacker_user_id, text=failure_base_message + backfire_message)
-            else:
-                 await context.bot.send_message(chat_id=attacker_user_id, text=failure_base_message + "\n💥 Your agent also ratted you out, but luckily you have no shops for them to shut down!")
-        else:
-            # --- Normal Failure (Agent Caught, Paid Bribe) --- #
-             await context.bot.send_message(chat_id=attacker_user_id, text=failure_base_message)
-
-        # Save attacker state (reduced cash, cooldown)
-        attacker_data["last_sabotage_attempt_time"] = attempt_time
-        game.save_player_data(attacker_user_id, attacker_data)
-
-# --- Main Menu Callback Handler --- #
+# --- Main Menu Callback Handler (Performs Actions) --- #
 async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles button presses from the main action keyboard shown with /status."""
+    """Handles button presses from the main action keyboard, performs the action."""
     query = update.callback_query
     user = query.from_user
     action = query.data
-    logger.info(f"--- main_menu_callback ENTERED by user {user.id}, action: {action} ---") # <<< Log Entry
+    chat_id = query.message.chat_id # Use chat_id for sending new messages
+    logger.info(f"--- main_menu_callback ENTERED by user {user.id}, action: {action} ---")
 
     # Answer callback query quickly
     try:
@@ -1296,38 +1178,116 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.info(f"Callback query answered for main_menu action {action}, user {user.id}.")
     except Exception as e:
         logger.error(f"ERROR answering callback query for main_menu: {e}", exc_info=True)
-        return # Can't proceed if answer fails
+        return # Can't proceed
 
-    # Simple implementation: Guide user to the text command
-    command_map = {
-        "main_collect": ("collect", "Use /collect to scoop up your dough!"),
-        "main_upgrade": ("upgrade", "Use /upgrade [shop_name] to boost a shop, or just /upgrade to see options."),
-        "main_expand": ("expand", "Use /expand [location_name] to grow your empire, or just /expand to see options."),
-        "main_challenges": ("challenges", "Use /challenges to see your current tasks."),
-        "main_leaderboard": ("leaderboard", "Use /leaderboard to check the top players."),
-        "main_buycoins": ("buycoins", "Use /buycoins to get more Pizza Coins."),
-        "main_help": ("help", "Use /help to see all commands."),
-    }
+    # Remove keyboard from original status message first
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+        logger.debug(f"Original status keyboard removed for action {action}.")
+    except Exception as e:
+        # Log warning but continue if possible
+        logger.warning(f"Failed to remove original status keyboard: {e}")
 
-    if action in command_map:
-        command, guidance_text = command_map[action]
-        logger.info(f"User {user.id} pressed '{action}' button. Sending guidance.")
-        try:
-            # Send guidance as a new message
-            await context.bot.send_message(chat_id=query.message.chat_id, text=guidance_text)
-            logger.debug(f"Guidance message sent for action {action}.")
-            # Edit the original message to remove the keyboard
-            await query.edit_message_reply_markup(reply_markup=None)
-            logger.debug(f"Original keyboard removed for action {action}.")
-        except Exception as e:
-             logger.error(f"Error sending guidance/editing markup for action {action}: {e}", exc_info=True)
-    else:
-        logger.warning(f"Received unknown main_menu callback query data: {action}")
-        try:
-            await context.bot.send_message(chat_id=query.message.chat_id, text="Sorry, that button seems outdated.")
-            await query.edit_message_reply_markup(reply_markup=None)
-        except Exception as e:
-             logger.warning(f"Failed to send unknown button message or edit markup: {e}")
+    # --- Perform Action based on Callback Data --- #
+    try:
+        await update_player_display_name(user.id, user)
+
+        if action == "main_collect":
+            logger.debug(f"Handling main_collect action for {user.id}")
+            # Replicate collect_command logic
+            collected_amount, completed_challenges, is_mafia_event, mafia_demand = game.collect_income(user.id)
+            if is_mafia_event:
+                if mafia_demand is None or mafia_demand <= 0:
+                    await context.bot.send_message(chat_id=chat_id, text="Collectors seemed confused... lucky break?")
+                else:
+                    context.user_data['mafia_collect_amount'] = collected_amount
+                    context.user_data['mafia_demand'] = mafia_demand
+                    keyboard = [[InlineKeyboardButton(f"🤌 Pay ${mafia_demand:,.2f}", callback_data="mafia_pay"), InlineKeyboardButton("🙅‍♂️ Tell 'em Fuggedaboutit!", callback_data="mafia_refuse"),]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    await context.bot.send_message(chat_id=chat_id, text=f"🚨 Uh oh! The Famiglia wants ${mafia_demand:,.2f} of your ${collected_amount:,.2f} haul! Pay up or refuse?", reply_markup=reply_markup)
+            elif collected_amount > 0.01:
+                tip_message, pineapple_message = "", ""
+                if random.random() < 0.15: # Tip chance
+                    player_data_tip = game.load_player_data(user.id)
+                    tip_amount = round(random.uniform(collected_amount * 0.05, collected_amount * 0.2) + random.uniform(5, 50), 2)
+                    tip_amount = max(5.0, tip_amount)
+                    player_data_tip["cash"] = player_data_tip.get("cash", 0) + tip_amount
+                    game.save_player_data(user.id, player_data_tip)
+                    tip_message = f"\n🍕 Wiseguy tipped ya ${tip_amount:.2f}!"
+                if random.random() < 0.05: # Pineapple chance
+                    pineapple_message = "\n🍍 Psst... Remember the pineapple rule..."
+                await context.bot.send_message(chat_id=chat_id, text=f"🤑 Pizza payday! +${collected_amount:,.2f}!{tip_message}{pineapple_message}", parse_mode="HTML")
+                await send_challenge_notifications(user.id, completed_challenges, context)
+                await check_and_notify_achievements(user.id, context)
+            else:
+                await context.bot.send_message(chat_id=chat_id, text="Nothin' to collect, boss. Ovens are cold!")
+
+        elif action == "main_upgrade":
+            logger.debug(f"Handling main_upgrade action for {user.id}")
+            # Replicate upgrade_command logic (no args case)
+            player_data = game.load_player_data(user.id)
+            shops = player_data.get("shops", {})
+            if not shops:
+                 await context.bot.send_message(chat_id=chat_id, text="You ain't got no shops to upgrade yet!")
+            else:
+                lines = ["🤌 Thinkin' 'bout upgrades? Here's what's cookin':\n"]
+                for shop_name, shop_data in shops.items():
+                     current_level = shop_data.get("level", 1)
+                     next_level = current_level + 1
+                     upgrade_cost = game.get_upgrade_cost(current_level, shop_name)
+                     current_rate_hr = game.get_shop_income_rate(shop_name, current_level) * 3600
+                     next_rate_hr = game.get_shop_income_rate(shop_name, next_level) * 3600
+                     lines.append(f"- <b>{shop_name}</b> Lvl {current_level}→{next_level}: ${upgrade_cost:,.2f} (${current_rate_hr:,.2f}/hr → ${next_rate_hr:,.2f}/hr)")
+                     lines.append(f"  `/upgrade {shop_name.lower()}`")
+                await context.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
+
+        elif action == "main_expand":
+            logger.debug(f"Handling main_expand action for {user.id}")
+            # Replicate expand_command logic (no args case)
+            player_data = game.load_player_data(user.id)
+            if not player_data:
+                await context.bot.send_message(chat_id=chat_id, text="Could not load your data.")
+            else:
+                available = game.get_available_expansions(player_data)
+                if not available:
+                     await context.bot.send_message(chat_id=chat_id, text="No new turf available right now, boss!")
+                else:
+                     keyboard = []
+                     row = []
+                     for i, loc in enumerate(available):
+                         cost = game.get_expansion_cost(loc)
+                         current_perf = game.get_current_performance_multiplier(loc)
+                         perf_emoji = "📈" if current_perf > 1.1 else "📉" if current_perf < 0.9 else "🤷‍♂️"
+                         button_text = f"{loc} {perf_emoji}x{current_perf:.1f} (${cost:,.0f})"
+                         row.append(InlineKeyboardButton(button_text, callback_data=f"expand_{loc}"))
+                         if (i + 1) % 2 == 0: keyboard.append(row); row = []
+                     if row: keyboard.append(row)
+                     reply_markup = InlineKeyboardMarkup(keyboard)
+                     await context.bot.send_message(chat_id=chat_id, text="Choose your next conquest (Perf/Cost shown):", reply_markup=reply_markup)
+
+        elif action == "main_challenges":
+             logger.debug(f"Handling main_challenges action for {user.id}")
+             await challenges_command(query.message, context)
+
+        elif action == "main_leaderboard":
+             logger.debug(f"Handling main_leaderboard action for {user.id}")
+             await leaderboard_command(query.message, context)
+
+        elif action == "main_buycoins":
+             logger.debug(f"Handling main_buycoins action for {user.id}")
+             await buy_coins_command(query.message, context)
+
+        elif action == "main_help":
+             logger.debug(f"Handling main_help action for {user.id}")
+             await help_command(query.message, context)
+
+        else:
+            logger.warning(f"Received unknown main_menu callback query data: {action}")
+            await context.bot.send_message(chat_id=chat_id, text="Sorry, that button seems outdated.")
+
+    except Exception as e:
+         logger.error(f"Error handling main_menu_callback action {action} for {user.id}: {e}", exc_info=True)
+         await context.bot.send_message(chat_id=chat_id, text="Ay! Somethin' went wrong with that button.")
 
 def main() -> None:
     """Start the bot and scheduler."""
