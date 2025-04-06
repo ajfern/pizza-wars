@@ -1402,8 +1402,48 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # --- Sabotage --- #
         elif action == "main_sabotage":
              logger.debug(f"Handling main_sabotage action via button for {user.id}")
-             # Call sabotage_command logic to show target list
-             await sabotage_command(query.message, context)
+             # Replicate sabotage_command logic (no args case) to show target list
+             attacker_user_id = user.id
+             attacker_data = game.load_player_data(attacker_user_id)
+             if not attacker_data:
+                 await context.bot.send_message(chat_id=chat_id, text="Couldn't load your data.")
+                 return
+             # Check Cooldown
+             now = time.time()
+             last_attempt_time = attacker_data.get("last_sabotage_attempt_time", 0.0)
+             time_since_last = now - last_attempt_time
+             if time_since_last < game.SABOTAGE_COOLDOWN_SECONDS:
+                  remaining_cooldown = timedelta(seconds=int(game.SABOTAGE_COOLDOWN_SECONDS - time_since_last))
+                  await context.bot.send_message(chat_id=chat_id, text=f"Your agents need to lay low! Sabotage available again in {str(remaining_cooldown).split('.')[0]}.")
+                  return
+             # Calculate potential cost for explanation
+             attacker_cash = attacker_data.get("cash", 0)
+             potential_cost = round(game.SABOTAGE_BASE_COST + (attacker_cash * game.SABOTAGE_PCT_COST), 2)
+             # Show Target List
+             potential_targets = game.get_cash_leaderboard_data(limit=20)
+             valid_targets = [(pid, name, cash) for pid, name, cash in potential_targets if pid != user.id]
+             if not valid_targets:
+                 await context.bot.send_message(chat_id=chat_id, text="No valid targets found on the cash leaderboard right now!")
+                 return
+             keyboard = []
+             for i, (target_id, display_name, cash_amount) in enumerate(valid_targets):
+                 rank = i + 1 ; name = display_name or f"Player {target_id}"
+                 if len(name) > 20: name = name[:17] + "..."
+                 button_text = f"{rank}. {name} (${cash_amount:,.0f})"
+                 keyboard.append([InlineKeyboardButton(button_text, callback_data=f"sabotage_{target_id}")])
+             if not keyboard: await context.bot.send_message(chat_id=chat_id, text="No valid targets found."); return
+             reply_markup = InlineKeyboardMarkup(keyboard)
+             # Explanation Message
+             explanation = (
+                 f"⚠️ **Sabotage Warning!** ⚠️\n"
+                 f"Attempting sabotage currently costs: **${potential_cost:,.2f}** (Cost only applies *if you fail*).\n\n"
+                 f"<b>Success ({int(game.SABOTAGE_SUCCESS_CHANCE * 100)}%):</b> Target's top shop shut down for {int(game.SABOTAGE_DURATION_SECONDS / 60)} mins.\n"
+                 f"<b>Failure ({int((1 - game.SABOTAGE_SUCCESS_CHANCE) * 100)}%):</b> You lose the ${potential_cost:,.2f} cost.\n"
+                 f"  - <b>Backfire Chance ({int(game.SABOTAGE_BACKFIRE_CHANCE * 100)}% of failures):</b> Your *own* top shop gets shut down too!\n\n"
+                 f"Cooldown after attempt: {int(game.SABOTAGE_COOLDOWN_SECONDS / 60)} minutes.\n\n"
+                 f"Choose your target wisely:"
+             )
+             await context.bot.send_message(chat_id=chat_id, text=explanation, reply_markup=reply_markup, parse_mode="HTML")
 
         else:
             logger.warning(f"Received unknown main_menu callback query data: {action}")
