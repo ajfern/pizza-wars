@@ -46,15 +46,19 @@ if not BOT_TOKEN:
 if not PAYMENT_PROVIDER_TOKEN:
     logger.warning("PAYMENT_PROVIDER_TOKEN environment variable not set! Payments will fail.")
 
-# Initialize Database Schema
+# Initialize Database Schema & Seed Performance Data
 try:
+    logger.info("Initializing database...")
     game.initialize_database()
+    logger.info("Seeding/Updating location performance data...")
+    game.update_location_performance() # Ensure this runs on startup
+    logger.info("Database init and performance seeding complete.")
 except ConnectionError as e:
     logger.critical(f"Database connection failed on startup: {e}. Exiting.")
-    exit() # Exit if DB can't be initialized
+    exit()
 except Exception as e:
-    logger.critical(f"Unexpected error during database initialization: {e}. Exiting.", exc_info=True)
-    exit() # Exit on other DB init errors
+    logger.critical(f"Unexpected error during database setup: {e}. Exiting.", exc_info=True)
+    exit()
 
 # Global Scheduler instance
 scheduler = AsyncIOScheduler(timezone="UTC") # Use UTC for consistency
