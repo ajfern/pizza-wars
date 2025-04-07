@@ -334,7 +334,14 @@ async def _process_sabotage(context: ContextTypes.DEFAULT_TYPE, attacker_user_id
         if shutdown_applied:
             await context.bot.send_message(chat_id=attacker_user_id, text=f"🐀 Success! Your agent planted the rat. {target_shop_display_name} shut down! No cost to you.")
             try:
-                await context.bot.send_message(chat_id=target_user_id, text=f"🚨 Bad news, boss! A health inspector (sent by a rival?) found a rat at {target_shop_display_name}! Shut down for 1 hour!")
+                attacker_name = attacker_data.get("display_name", f"Player {attacker_user_id}")
+                attacker_franchise = attacker_data.get("franchise_name", "")
+                franchise_text = f" ({attacker_franchise})" if attacker_franchise else ""
+                
+                await context.bot.send_message(
+                    chat_id=target_user_id, 
+                    text=f"🚨 SABOTAGE ALERT! 🚨\n\nYour rival {attacker_name}{franchise_text} sent a health inspector who found a 'rat' at your {target_shop_display_name} shop! Shut down for 1 hour!"
+                )
             except Exception as notify_err: logger.error(f"Failed to notify target {target_user_id} of successful sabotage: {notify_err}")
         else:
             await context.bot.send_message(chat_id=attacker_user_id, text=f"Agent found the shop ({target_shop_display_name}), but couldn't apply shutdown... Weird.")
@@ -372,7 +379,13 @@ async def _process_sabotage(context: ContextTypes.DEFAULT_TYPE, attacker_user_id
             await context.bot.send_message(chat_id=attacker_user_id, text=failure_base_message)
             try: # Notify Target of FAILED attempt
                  attacker_name = attacker_data.get("display_name", f"Player {attacker_user_id}")
-                 await context.bot.send_message(chat_id=target_user_id, text=f"Word on the street is {attacker_name} sent a goon after your {target_shop_display_name} shop, but the cops scared 'em off. Nothin' to worry about... probably.")
+                 attacker_franchise = attacker_data.get("franchise_name", "")
+                 franchise_text = f" ({attacker_franchise})" if attacker_franchise else ""
+                 
+                 await context.bot.send_message(
+                     chat_id=target_user_id, 
+                     text=f"⚠️ SABOTAGE ATTEMPT FOILED! ⚠️\n\n{attacker_name}{franchise_text} tried to send a health inspector to your {target_shop_display_name} shop, but your security caught them! No damage done."
+                 )
             except Exception as notify_err: logger.error(f"Failed to notify target {target_user_id} of failed sabotage: {notify_err}")
         attacker_data["last_sabotage_attempt_time"] = attempt_time
 
