@@ -941,29 +941,55 @@ def format_status(player_data: dict, sort_by: str = 'name') -> str:
     status_lines.append(f"<b>Current Income Rate:</b> ${income_rate:.2f}/sec")
     uncollected_income = calculate_uncollected_income(player_data)
     status_lines.append(f"<b>Uncollected Income:</b> ${uncollected_income:.2f}")
-    available_expansions = get_available_expansions(player_data)
+    
+    # Get the list of expansions the player is actually eligible for
+    eligible_expansions = get_available_expansions(player_data)
+    
     status_lines.append("<b>Available Expansions:</b>")
-    if available_expansions:
-        exp_list_formatted = []
-        for loc in available_expansions:
-            req_data = EXPANSION_LOCATIONS[loc]
-            req_type = req_data[0]
-            req_value = req_data[1]
-            gdp_factor = req_data[2]
-            cost_scale = req_data[3]
-            expansion_cost = get_expansion_cost(loc)
-            current_perf = get_current_performance_multiplier(loc)
-            perf_emoji = "📈" if current_perf > 1.1 else "📉" if current_perf < 0.9 else "🤷‍♂️"
-            if req_type == "level": req_str = f"(Req: {INITIAL_SHOP_NAME} Lvl {req_value})"
-            elif req_type == "shop_level": req_str = f"(Req: {req_value} Lvl {req_data[2]})"
-            elif req_type == "total_income": req_str = f"(Req: Total Earned ${req_value:,.2f})"
-            elif req_type == "shops_count": req_str = f"(Req: {req_value} Shops)"
-            elif req_type == "has_shop": req_str = f"(Req: Own {req_value})"
-            else: req_str = "(Unknown Req)"
-            exp_list_formatted.append(f"  - {loc} {perf_emoji}x{current_perf:.1f} - Cost: ${expansion_cost:,.2f} {req_str}")
+    
+    # Show all possible expansions, not just eligible ones
+    owned_shops = player_data.get("shops", {})
+    exp_list_formatted = []
+    
+    for loc, req_data in EXPANSION_LOCATIONS.items():
+        # Skip locations player already owns
+        if loc in owned_shops:
+            continue
+            
+        # Get requirement details
+        req_type = req_data[0]
+        req_value = req_data[1]
+        gdp_factor = req_data[2]
+        cost_scale = req_data[3]
+        expansion_cost = get_expansion_cost(loc)
+        current_perf = get_current_performance_multiplier(loc)
+        
+        # Format performance indicator
+        perf_emoji = "📈" if current_perf > 1.1 else "📉" if current_perf < 0.9 else "🤷‍♂️"
+        
+        # Format requirement string
+        if req_type == "level": 
+            req_str = f"(Req: {INITIAL_SHOP_NAME} Lvl {req_value})"
+        elif req_type == "shop_level": 
+            req_str = f"(Req: {req_value} Lvl {req_data[2]})"
+        elif req_type == "total_income": 
+            req_str = f"(Req: Total Earned ${req_value:,.2f})"
+        elif req_type == "shops_count": 
+            req_str = f"(Req: {req_value} Shops)"
+        elif req_type == "has_shop": 
+            req_str = f"(Req: Own {req_value})"
+        else: 
+            req_str = "(Unknown Req)"
+        
+        # Add eligible indicator
+        eligible_emoji = "✅ " if loc in eligible_expansions else "🔒 "
+        
+        exp_list_formatted.append(f"  - {eligible_emoji}{loc} {perf_emoji}x{current_perf:.1f} - Cost: ${expansion_cost:,.2f} {req_str}")
+    
+    if exp_list_formatted:
         status_lines.extend(sorted(exp_list_formatted)) # Sort expansions alphabetically
     else:
-        status_lines.append("  None available right now. Keep upgrading!")
+        status_lines.append("  No more expansions available. You've conquered the pizza universe!")
     
     return "\n".join(status_lines)
 
