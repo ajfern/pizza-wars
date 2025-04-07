@@ -1340,6 +1340,42 @@ async def upgrade_shop_choice_callback(update: Update, context: ContextTypes.DEF
     logger.debug(f"Upgrade attempt processed for {user.id}, showing status.")
     await _send_status_update(query.message.chat_id, user.id, context)
 
+# --- Helper to display status after actions --- #
+async def _send_status_update(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Re-shows the status message with buttons after an action is completed."""
+    try:
+        player_data = game.load_player_data(user_id)
+        if not player_data:
+            await context.bot.send_message(chat_id=chat_id, text="Could not load your updated status.")
+            return
+            
+        status_message = game.format_status(player_data)
+        
+        # Create action buttons
+        keyboard = [
+            [
+                InlineKeyboardButton("💰 Collect Income", callback_data="main_collect"),
+                InlineKeyboardButton("⬆️ Upgrade Shop", callback_data="main_upgrade"),
+            ],
+            [
+                InlineKeyboardButton("🗺️ Expand Empire", callback_data="main_expand"),
+                InlineKeyboardButton("🎯 View Challenges", callback_data="main_challenges"),
+            ],
+            [
+                InlineKeyboardButton("🏆 Leaderboard", callback_data="main_leaderboard"),
+                InlineKeyboardButton("🔪 Sabotage Rival", callback_data="main_sabotage"),
+            ],
+            [
+                InlineKeyboardButton("🍕 Buy Coins", callback_data="main_buycoins"),
+                InlineKeyboardButton("❓ Help Guide", callback_data="main_help"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await context.bot.send_message(chat_id=chat_id, text=status_message, reply_markup=reply_markup, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error in _send_status_update for user {user_id}: {e}", exc_info=True)
+
 # --- Main Menu Callback Handler --- #
 async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles button presses from the main action keyboard, performs the action."""
@@ -1375,12 +1411,15 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if is_mafia_event:
                 if mafia_demand is None or mafia_demand <= 0:
                     await context.bot.send_message(chat_id=chat_id, text="Collectors seemed confused... lucky break?")
+                    # Show status after mafia confusion
+                    await _send_status_update(chat_id, user.id, context)
                 else:
                     context.user_data['mafia_collect_amount'] = collected_amount
                     context.user_data['mafia_demand'] = mafia_demand
                     keyboard = [[InlineKeyboardButton(f"🤌 Pay ${mafia_demand:,.2f}", callback_data="mafia_pay"), InlineKeyboardButton("🙅‍♂️ Tell 'em Fuggedaboutit!", callback_data="mafia_refuse"),]]
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     await context.bot.send_message(chat_id=chat_id, text=f"🚨 Uh oh! The Famiglia wants ${mafia_demand:,.2f} of your ${collected_amount:,.2f} haul! Pay up or refuse?", reply_markup=reply_markup)
+                    # Don't show status yet, mafia_button_callback will handle this
             elif collected_amount > 0.01:
                 tip_message, pineapple_message = "", ""
                 if random.random() < 0.15: # Tip chance
@@ -1394,8 +1433,13 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await context.bot.send_message(chat_id=chat_id, text=f"🤑 Pizza payday! +${collected_amount:,.2f}!{tip_message}{pineapple_message}", parse_mode="HTML")
                 await send_challenge_notifications(user.id, completed_challenges, context)
                 await check_and_notify_achievements(user.id, context)
+                
+                # Show status after successful collection
+                await _send_status_update(chat_id, user.id, context)
             else:
                 await context.bot.send_message(chat_id=chat_id, text="Nothin' to collect, boss. Ovens are cold!")
+                # Show status even after unsuccessful collection
+                await _send_status_update(chat_id, user.id, context)
 
         # --- Upgrade (Show Options) --- #
         elif action == "main_upgrade":
