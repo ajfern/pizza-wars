@@ -170,6 +170,9 @@ async def _show_upgrade_options(update_or_query: Update | CallbackQuery, context
     if not shops:
          await context.bot.send_message(chat_id=chat_id, text="You ain't got no shops to upgrade yet!")
          return
+         
+    # Get player's current cash
+    current_cash = player_data.get("cash", 0)
 
     keyboard = []
     shop_list = sorted(shops.items(), key=lambda item: game.get_upgrade_cost(item[1].get('level', 1), item[0])) # Sort by current upgrade cost asc
@@ -191,16 +194,20 @@ async def _show_upgrade_options(update_or_query: Update | CallbackQuery, context
         return
 
     reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Create message with cash display at the top
+    message_text = f"💰 Your current cash: ${current_cash:,.2f}\n\n🤌 Which shop needs some love (and cash)?"
+    
     # If called from a CallbackQuery, edit the message, otherwise send new
     if isinstance(update_or_query, CallbackQuery):
         try:
-             await update_or_query.edit_message_text("🤌 Which shop needs some love (and cash)?", reply_markup=reply_markup)
+             await update_or_query.edit_message_text(message_text, reply_markup=reply_markup)
         except Exception as e:
             logger.error(f"Failed to edit message for upgrade options: {e}")
             # Fallback: Send new message if edit fails
-            await context.bot.send_message(chat_id=chat_id, text="🤌 Which shop needs some love (and cash)?", reply_markup=reply_markup)
+            await context.bot.send_message(chat_id=chat_id, text=message_text, reply_markup=reply_markup)
     else: # Called from /upgrade command
-        await context.bot.send_message(chat_id=chat_id, text="🤌 Which shop needs some love (and cash)?", reply_markup=reply_markup)
+        await context.bot.send_message(chat_id=chat_id, text=message_text, reply_markup=reply_markup)
 
 
 # --- NEW Helper to process upgrade attempt ---
