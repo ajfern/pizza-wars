@@ -906,6 +906,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/setname [name] - Set your franchise name (e.g., `/setname Luigi's Finest`).\n"
         "/renameshop [loc] [name] - Rename a specific shop (e.g., `/renameshop Brooklyn Luigi's`).\n"
         "/status [s:key] - Check status. Optionally sort shops by `s:name`, `s:level`, or `s:cost` (e.g., `/status s:cost`).\n"
+        "/play - Alternative to /status. Shows your game status and action buttons.\n"
         "/collect - Scoop up the cash your shops have earned!\n"
         "/upgrade - Show available shop upgrades (or use `/upgrade [shop]` directly).\n"
         "/expand [location] - List expansion options (with costs!) or expand to a new location.\n\n"
@@ -1587,6 +1588,7 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                  "/setname [name] - Set your franchise name (e.g., `/setname Luigi's Finest`).\n"
                  "/renameshop [loc] [name] - Rename a specific shop (e.g., `/renameshop Brooklyn Luigi's`).\n"
                  "/status [s:key] - Check status. Optionally sort shops by `s:name`, `s:level`, or `s:cost` (e.g., `/status s:cost`).\n"
+                 "/play - Alternative to /status. Shows your game status and action buttons.\n"
                  "/collect - Scoop up the cash your shops have earned!\n"
                  "/upgrade - Show available shop upgrades (or use `/upgrade [shop]` directly).\n"
                  "/expand - List expansion options (with costs!) or show expansion buttons.\n\n"
@@ -1669,6 +1671,7 @@ def main() -> None:
     logger.info("Adding command handlers...")
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("play", status_command))  # Add /play command that calls status_command
     application.add_handler(CommandHandler("collect", collect_command))
     application.add_handler(CommandHandler("upgrade", upgrade_command))
     application.add_handler(CommandHandler("expand", expand_command))
