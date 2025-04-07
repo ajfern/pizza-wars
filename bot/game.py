@@ -128,6 +128,10 @@ EXPANSION_LOCATIONS = {
     "Rio de Janeiro": ("has_shop", "Mexico City", 1.8, 2.2), # <<< New: Req Own Mexico City
     # Oceania
     "Sydney":       ("total_income", 250000, 2.8, 3.5),     # Req: Total Earned $250k
+    # Space Frontiers (Ultra High-End Expansions)
+    "The Moon":     ("total_income", 10000000, 10.0, 25.0),  # Req: Total Earned $10M - Low gravity means the pizza floats!
+    "Mars":         ("shop_level", "The Moon", 15, 20.0, 50.0), # Req: Moon Lvl 15 - Delivery takes 6-8 months
+    "Qo'noS":       ("shops_count", 15, 50.0, 100.0),    # Req: Own 15 Shops - Klingons prefer their pizza with live toppings
 }
 
 # --- Achievement Definitions ---
@@ -152,6 +156,10 @@ ACHIEVEMENTS = {
     "asia_expansion": ("Taste of the East", "Expand to Tokyo", ('has_shop', "Tokyo"), 1, 'pizza_coins', 200, None),
     "la_la_land": ("La La Land", "Expand to Los Angeles", ('has_shop', "Los Angeles"), 1, 'pizza_coins', 100, "West Coast Boss"), # <<< New
     "roman_holiday": ("Roman Holiday", "Expand to Rome", ('has_shop', "Rome"), 1, 'pizza_coins', 125, None), # <<< New
+    # Space expansion achievements
+    "lunar_landing": ("One Small Step for Pizza", "Expand to The Moon", ('has_shop', "The Moon"), 1, 'pizza_coins', 1000, "Galactic Pioneer"),
+    "martian_menu": ("Red Planet Special", "Expand to Mars", ('has_shop', "Mars"), 1, 'pizza_coins', 5000, "Interplanetary Chef"),
+    "klingon_takeout": ("Today is a Good Day to Dine", "Expand to Qo'noS", ('has_shop', "Qo'noS"), 1, 'pizza_coins', 10000, "Universal Conqueror"),
     # Add more achievements: rivals defeated (requires rival logic), specific shop levels, etc.
 }
 
@@ -928,7 +936,7 @@ def format_status(player_data: dict, sort_by: str = 'name') -> str:
                  time_left = timedelta(seconds=int(shutdown_until - time.time()))
                  shutdown_str = f" 🚫(Closed: {str(time_left).split('.')[0]})"
 
-            status_lines.append(f"  - {perf_emoji} <b>{display_shop_name}:</b> Level {level} (Upgrade Cost: ${upgrade_cost:,.2f}){shutdown_str}")
+            status_lines.append(f"  - {perf_emoji} <b>{display_shop_name}:</b> Level {level}{shutdown_str}")
 
     income_rate = calculate_income_rate(shops)
     status_lines.append(f"<b>Current Income Rate:</b> ${income_rate:.2f}/sec")
