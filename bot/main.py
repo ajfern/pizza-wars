@@ -565,17 +565,12 @@ async def collect_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         elif collected_amount > 0.01:
             # --- NORMAL COLLECTION (with tip/pineapple) --- #
-            tip_message = ""
-            pineapple_message = ""
-
-            # "Just the Tip" Mechanic
-            tip_chance = 0.15
-            if random.random() < tip_chance:
-                player_data = game.load_player_data(user.id)
+            tip_message, pineapple_message = "", ""
+            if random.random() < 0.15: # Tip chance
+                player_data_tip = game.load_player_data(user.id)
                 tip_amount = round(random.uniform(collected_amount * 0.05, collected_amount * 0.2) + random.uniform(5, 50), 2)
-                tip_amount = max(5.0, tip_amount)
-                player_data["cash"] = player_data.get("cash", 0) + tip_amount
-                game.save_player_data(user.id, player_data)
+                player_data_tip["cash"] = player_data_tip.get("cash", 0) + tip_amount
+                game.save_player_data(user.id, player_data_tip)
                 tip_message = f"\n🍕 Woah, some wiseguy just tipped you an extra ${tip_amount:.2f} for the 'best slice in town.' You're killin' it!"
                 logger.info(f"User {user.id} received a tip of ${tip_amount:.2f}")
 
@@ -819,6 +814,10 @@ async def challenges_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             lines.append("  Error generating challenge. Check logs or try again later.")
 
     await update.message.reply_html("\n".join(lines))
+    
+    # Show status after viewing challenges
+    chat_id = update.effective_chat.id if update.effective_chat else user.id
+    await _send_status_update(chat_id, user.id, context)
 
 # --- Consolidated Leaderboard Command --- #
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -857,10 +856,17 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                 lines.append(f"{rank}. {name} - ${cash_amount:,.2f}")
 
         await update.message.reply_html("\n".join(lines))
+        
+        # Show status after viewing leaderboard
+        chat_id = update.effective_chat.id if update.effective_chat else user.id
+        await _send_status_update(chat_id, user.id, context)
 
     except Exception as e:
         logger.error(f"Error generating combined leaderboard: {e}", exc_info=True)
         await update.message.reply_text("Couldn't fetch the leaderboards right now, try again later.")
+        # Show status even after error
+        chat_id = update.effective_chat.id if update.effective_chat else user.id
+        await _send_status_update(chat_id, user.id, context)
 
 # --- Help Command --- #
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -889,6 +895,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "<i>Now get back to building that empire!</i>"
     )
     await update.message.reply_html(help_text)
+    
+    # Show status after viewing help
+    if user:
+        chat_id = update.effective_chat.id if update.effective_chat else user.id
+        await _send_status_update(chat_id, user.id, context)
 
 # --- Payment Handlers ---
 async def buy_coins_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1493,8 +1504,13 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                          lines.append(f"    Reward: {challenge['reward_value']:,} {challenge['reward_type'].upper()}")
                      else: lines.append("  Error generating challenge.")
                  await context.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
+                 
+                 # Show status after viewing challenges via button
+                 await _send_status_update(chat_id, user.id, context)
              else:
                  await context.bot.send_message(chat_id=chat_id, text="Could not load challenge data.")
+                 # Also show status after error
+                 await _send_status_update(chat_id, user.id, context)
 
         # --- Leaderboard --- #
         elif action == "main_leaderboard":
@@ -1509,6 +1525,9 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
              if not top_cash: lines.append("<i>Everyone's broke!</i>")
              else: lines.extend([f"{(i+1)}. {(name or f'Player {pid}')[:25]} - ${cash:,.2f}" for i, (pid, name, cash) in enumerate(top_cash)])
              await context.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
+             
+             # Show status after viewing leaderboard via button
+             await _send_status_update(chat_id, user.id, context)
 
         # --- Buy Coins --- #
         elif action == "main_buycoins":
@@ -1546,6 +1565,9 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                  "<i>Now get back to building that empire!</i>"
              )
              await context.bot.send_message(chat_id=chat_id, text=help_text, parse_mode="HTML")
+             
+             # Show status after viewing help via button
+             await _send_status_update(chat_id, user.id, context)
 
         # --- Sabotage --- #
         elif action == "main_sabotage":
