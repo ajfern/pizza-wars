@@ -5,6 +5,7 @@ import random # For tips!
 import time # <<< Added missing import
 import re # For sanitization
 import html # For escaping
+import asyncio # For delays between messages
 from datetime import time as dt_time, timedelta, datetime, timezone
 
 # Telegram Core Types
@@ -760,6 +761,7 @@ async def expansion_choice_callback(update: Update, context: ContextTypes.DEFAUL
     await _process_expansion(query, context, user.id, target_location)
     # --- Show Status Again AFTER processing --- #
     logger.debug(f"Expansion attempt processed for {user.id}, showing status.")
+    await asyncio.sleep(1.5)  # Add delay to let player read the message
     await _send_status_update(query.message.chat_id, user.id, context)
 
 async def challenges_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -817,6 +819,7 @@ async def challenges_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     # Show status after viewing challenges
     chat_id = update.effective_chat.id if update.effective_chat else user.id
+    await asyncio.sleep(1.5)  # Add delay to let player read the message
     await _send_status_update(chat_id, user.id, context)
 
 # --- Consolidated Leaderboard Command --- #
@@ -859,6 +862,7 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         # Show status after viewing leaderboard
         chat_id = update.effective_chat.id if update.effective_chat else user.id
+        await asyncio.sleep(1.5)  # Add delay to let player read the message
         await _send_status_update(chat_id, user.id, context)
 
     except Exception as e:
@@ -866,6 +870,7 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("Couldn't fetch the leaderboards right now, try again later.")
         # Show status even after error
         chat_id = update.effective_chat.id if update.effective_chat else user.id
+        await asyncio.sleep(1.5)  # Add delay to let player read the message
         await _send_status_update(chat_id, user.id, context)
 
 # --- Help Command --- #
@@ -899,6 +904,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Show status after viewing help
     if user:
         chat_id = update.effective_chat.id if update.effective_chat else user.id
+        await asyncio.sleep(1.5)  # Add delay to let player read the message
         await _send_status_update(chat_id, user.id, context)
 
 # --- Payment Handlers ---
@@ -1071,6 +1077,7 @@ async def mafia_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await check_and_notify_achievements(user.id, context)
         # --- Show Status Again --- #
         logger.debug("Mafia event resolved, showing status again.")
+        await asyncio.sleep(1.5)  # Add delay to let player read the message
         await _send_status_update(query.message.chat_id, user.id, context)
 
     except Exception as e:
@@ -1331,6 +1338,7 @@ async def sabotage_shop_choice_callback(update: Update, context: ContextTypes.DE
         logger.info(f"Saved attacker data for {attacker_user_id} after sabotage attempt.")
     # --- Show Status Again AFTER processing --- #
     logger.debug(f"Sabotage attempt processed for {attacker_user_id}, showing status.")
+    await asyncio.sleep(1.5)  # Add delay to let player read the message
     await _send_status_update(query.message.chat_id, attacker_user_id, context)
 
 # --- Upgrade Shop Choice Callback Handler --- #
@@ -1349,6 +1357,7 @@ async def upgrade_shop_choice_callback(update: Update, context: ContextTypes.DEF
     await _process_upgrade(context, user.id, shop_location, query=query)
     # --- Show Status Again AFTER processing --- #
     logger.debug(f"Upgrade attempt processed for {user.id}, showing status.")
+    await asyncio.sleep(1.5)  # Add delay to let player read the message
     await _send_status_update(query.message.chat_id, user.id, context)
 
 # --- Helper to display status after actions --- #
@@ -1423,6 +1432,7 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 if mafia_demand is None or mafia_demand <= 0:
                     await context.bot.send_message(chat_id=chat_id, text="Collectors seemed confused... lucky break?")
                     # Show status after mafia confusion
+                    await asyncio.sleep(1.5)  # Add delay to let player read the message
                     await _send_status_update(chat_id, user.id, context)
                 else:
                     context.user_data['mafia_collect_amount'] = collected_amount
@@ -1446,10 +1456,12 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await check_and_notify_achievements(user.id, context)
                 
                 # Show status after successful collection
+                await asyncio.sleep(1.5)  # Add delay to let player read the message
                 await _send_status_update(chat_id, user.id, context)
             else:
                 await context.bot.send_message(chat_id=chat_id, text="Nothin' to collect, boss. Ovens are cold!")
                 # Show status even after unsuccessful collection
+                await asyncio.sleep(1.5)  # Add delay to let player read the message
                 await _send_status_update(chat_id, user.id, context)
 
         # --- Upgrade (Show Options) --- #
@@ -1506,10 +1518,12 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                  await context.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
                  
                  # Show status after viewing challenges via button
+                 await asyncio.sleep(1.5)  # Add delay to let player read the message
                  await _send_status_update(chat_id, user.id, context)
              else:
                  await context.bot.send_message(chat_id=chat_id, text="Could not load challenge data.")
                  # Also show status after error
+                 await asyncio.sleep(1.5)  # Add delay to let player read the message
                  await _send_status_update(chat_id, user.id, context)
 
         # --- Leaderboard --- #
@@ -1527,6 +1541,7 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
              await context.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
              
              # Show status after viewing leaderboard via button
+             await asyncio.sleep(1.5)  # Add delay to let player read the message
              await _send_status_update(chat_id, user.id, context)
 
         # --- Buy Coins --- #
@@ -1567,6 +1582,7 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
              await context.bot.send_message(chat_id=chat_id, text=help_text, parse_mode="HTML")
              
              # Show status after viewing help via button
+             await asyncio.sleep(1.5)  # Add delay to let player read the message
              await _send_status_update(chat_id, user.id, context)
 
         # --- Sabotage --- #
