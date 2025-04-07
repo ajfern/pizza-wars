@@ -871,7 +871,6 @@ def format_status(player_data: dict, sort_by: str = 'name') -> str:
 
     status_lines = [
         header,
-        f"(Player ID: {user_id})",
         f"<b>Cash:</b> ${cash:,.2f}",
         f"<b>Pizza Coins:</b> {pizza_coins:,} 🍕",
         f"<b>Total Income Earned:</b> ${total_income_earned:,.2f}",
@@ -941,7 +940,7 @@ def format_status(player_data: dict, sort_by: str = 'name') -> str:
     income_rate = calculate_income_rate(shops)
     status_lines.append(f"<b>Current Income Rate:</b> ${income_rate:.2f}/sec")
     uncollected_income = calculate_uncollected_income(player_data)
-    status_lines.append(f"<b>Uncollected Income:</b> ${uncollected_income:.2f} (Use /collect)")
+    status_lines.append(f"<b>Uncollected Income:</b> ${uncollected_income:.2f}")
     available_expansions = get_available_expansions(player_data)
     status_lines.append("<b>Available Expansions:</b>")
     if available_expansions:
@@ -961,17 +960,11 @@ def format_status(player_data: dict, sort_by: str = 'name') -> str:
             elif req_type == "shops_count": req_str = f"(Req: {req_value} Shops)"
             elif req_type == "has_shop": req_str = f"(Req: Own {req_value})"
             else: req_str = "(Unknown Req)"
-            exp_list_formatted.append(f"  - {loc} {perf_emoji}x{current_perf:.1f} - Cost: ${expansion_cost:,.2f} {req_str} - Use /expand {loc.lower()}")
+            exp_list_formatted.append(f"  - {loc} {perf_emoji}x{current_perf:.1f} - Cost: ${expansion_cost:,.2f} {req_str}")
         status_lines.extend(sorted(exp_list_formatted)) # Sort expansions alphabetically
     else:
         status_lines.append("  None available right now. Keep upgrading!")
-    status_lines.append("<b>Active Challenges:</b> (/challenges for details)")
-    for timescale, challenge in player_data.get("active_challenges", {}).items():
-        if challenge:
-            status_lines.append(f"  - {timescale.capitalize()}: {challenge['description']}")
-        else:
-            status_lines.append(f"  - {timescale.capitalize()}: None active")
-    status_lines.append("\n<i>Use Pizza Coins 🍕 to speed things up! (Coming Soon)</i>")
+    
     return "\n".join(status_lines)
 
 # --- Payment Logic (Pack Definitions) ---
