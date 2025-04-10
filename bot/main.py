@@ -854,7 +854,19 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         # --- Fetch Data --- #
         top_income_players = game.get_leaderboard_data(limit=10)
-        top_cash_players = game.get_cash_leaderboard_data(limit=10)
+        
+        # --- Calculate income rates for all players --- #
+        income_rate_data = []
+        for player_id, display_name, _ in top_income_players:
+            player_data = game.load_player_data(player_id)
+            if player_data:
+                shops = player_data.get("shops", {})
+                income_rate = game.calculate_income_rate(shops)
+                income_rate_data.append((player_id, display_name, income_rate))
+        
+        # Sort by income rate
+        income_rate_data.sort(key=lambda x: x[2], reverse=True)
+        income_rate_data = income_rate_data[:10]  # Limit to top 10
 
         # --- Format Income Leaderboard --- #
         lines = ["<b>🏆 Global Pizza Empire Leaderboard 🏆</b>\n(Based on Total Income Earned)\n"]
@@ -867,16 +879,16 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if len(name) > 25: name = name[:22] + "..."
                 lines.append(f"{rank}. {name} - ${total_income:,.2f}")
 
-        # --- Format Cash Leaderboard --- #
-        lines.append("\n<b>🤑 William's Wallet Leaderboard 🤑</b>\n(Based on Current Cash)\n")
-        if not top_cash_players:
-            lines.append("<i>Everyone's broke!</i>")
+        # --- Format Income Rate Leaderboard --- #
+        lines.append("\n<b>💰 Income Rate Leaderboard 💰</b>\n($/sec)\n")
+        if not income_rate_data:
+            lines.append("<i>No income rates calculated!</i>")
         else:
-            for i, (player_id, display_name, cash_amount) in enumerate(top_cash_players):
+            for i, (player_id, display_name, rate) in enumerate(income_rate_data):
                 rank = i + 1
                 name = display_name or f"Player {player_id}"
                 if len(name) > 25: name = name[:22] + "..."
-                lines.append(f"{rank}. {name} - ${cash_amount:,.2f}")
+                lines.append(f"{rank}. {name} - ${rate:.2f}/sec")
 
         await update.message.reply_html("\n".join(lines))
         
@@ -1552,13 +1564,28 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
              logger.debug(f"Handling main_leaderboard action via button for {user.id}")
              # Replicate leaderboard_command logic
              top_income = game.get_leaderboard_data(limit=10)
-             top_cash = game.get_cash_leaderboard_data(limit=10)
+             
+             # Calculate income rates for all players we find
+             income_rate_data = []
+             for player_id, player_name, _ in top_income:
+                 player_data = game.load_player_data(player_id)
+                 if player_data:
+                     shops = player_data.get("shops", {})
+                     income_rate = game.calculate_income_rate(shops)
+                     income_rate_data.append((player_id, player_name, income_rate))
+             
+             # Sort by income rate
+             income_rate_data.sort(key=lambda x: x[2], reverse=True)
+             income_rate_data = income_rate_data[:10]  # Limit to top 10
+             
              lines = ["<b>🏆 Global Income Leaderboard 🏆</b>\n(Total Earned)\n"]
              if not top_income: lines.append("<i>No income earned yet!</i>")
              else: lines.extend([f"{(i+1)}. {(name or f'Player {pid}')[:25]} - ${inc:,.2f}" for i, (pid, name, inc) in enumerate(top_income)])
-             lines.append("\n<b>🤑 William's Wallet Leaderboard 🤑</b>\n(Current Cash)\n")
-             if not top_cash: lines.append("<i>Everyone's broke!</i>")
-             else: lines.extend([f"{(i+1)}. {(name or f'Player {pid}')[:25]} - ${cash:,.2f}" for i, (pid, name, cash) in enumerate(top_cash)])
+             
+             lines.append("\n<b>💰 Income Rate Leaderboard 💰</b>\n($/sec)\n")
+             if not income_rate_data: lines.append("<i>No income rates calculated!</i>")
+             else: lines.extend([f"{(i+1)}. {(name or f'Player {pid}')[:25]} - ${rate:.2f}/sec" for i, (pid, name, rate) in enumerate(income_rate_data)])
+             
              await context.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
              
              # Show status after viewing leaderboard via button
