@@ -1342,9 +1342,15 @@ async def sabotage_choice_callback(update: Update, context: ContextTypes.DEFAULT
     for location, shop_data in shop_list:
         custom_name = shop_data.get("custom_name", location)
         level = shop_data.get("level", 1)
+        
+        # Calculate the income rate for this specific shop
+        shop_rate = game.get_shop_income_rate(location, level)
+        
         display_name = f"{custom_name} ({location})" if custom_name != location else location
         callback_data = f"sabo_shop_{target_user_id}_{location}"
-        keyboard.append([InlineKeyboardButton(f"{display_name} (Lvl {level})", callback_data=callback_data)])
+        
+        # Show both the level and income rate for the shop
+        keyboard.append([InlineKeyboardButton(f"{display_name} (Lvl {level}) - ${shop_rate:.2f}/sec", callback_data=callback_data)])
     if not keyboard:
         await query.edit_message_text(f"{target_name} seems to have no valid shops."); return
     reply_markup = InlineKeyboardMarkup(keyboard)
