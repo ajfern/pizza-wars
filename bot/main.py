@@ -1267,18 +1267,34 @@ async def sabotage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Show Target List
     try:
+        # Get potential targets based on income rate
         potential_targets = game.get_cash_leaderboard_data(limit=20)
-        valid_targets = [(pid, name, cash) for pid, name, cash in potential_targets if pid != user.id]
+        income_rate_data = []
+        
+        # Calculate income rates for potential targets
+        for player_id, player_name, _ in potential_targets:
+            if player_id != user.id:  # Skip the current user
+                player_data = game.load_player_data(player_id)
+                if player_data:
+                    shops = player_data.get("shops", {})
+                    income_rate = game.calculate_income_rate(shops)
+                    income_rate_data.append((player_id, player_name, income_rate))
+        
+        # Sort by income rate and get top 20
+        income_rate_data.sort(key=lambda x: x[2], reverse=True)
+        income_rate_data = income_rate_data[:20]
+        
+        valid_targets = income_rate_data
         if not valid_targets:
-            await update.message.reply_text("No valid targets found on the cash leaderboard right now!")
+            await update.message.reply_text("No valid targets found right now!")
             return
 
         keyboard = []
-        for i, (target_id, display_name, cash_amount) in enumerate(valid_targets):
+        for i, (target_id, display_name, income_rate) in enumerate(valid_targets):
             rank = i + 1
             name = display_name or f"Player {target_id}"
             if len(name) > 20: name = name[:17] + "..."
-            button_text = f"{rank}. {name} (${cash_amount:,.0f})"
+            button_text = f"{rank}. {name} (${income_rate:.2f}/sec)"
             keyboard.append([InlineKeyboardButton(button_text, callback_data=f"sabotage_{target_id}")])
 
         if not keyboard: # Should be caught by valid_targets check, but safety
